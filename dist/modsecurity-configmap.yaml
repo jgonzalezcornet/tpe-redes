@@ -1,0 +1,8 @@
+data:
+  enable-modsecurity: "true"
+  enable-owasp-modsecurity-crs: "true"
+  modsecurity-snippet: |
+    Include /etc/nginx/modsecurity/modsecurity.conf
+    SecRuleEngine DetectionOnly
+    SecAuditEngine RelevantOnly
+    SecAuditLogParts ABIJDEFHZ

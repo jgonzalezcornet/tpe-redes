@@ -50,6 +50,7 @@ check_prerequisites() {
 create_cluster_and_deploy() {
     create_cluster
     install_ingress
+    configure_modsecurity
     build_images
     load_images
     deploy_services
@@ -120,6 +121,15 @@ install_ingress() {
     else
         print_success "Nginx ingress controller already installed"
     fi
+}
+
+configure_modsecurity() {
+    print_status "Configuring ModSecurity (DetectionOnly + OWASP CRS) on ingress controller..."
+    kubectl patch configmap ingress-nginx-controller \
+        -n ingress-nginx \
+        --type merge \
+        --patch-file "$DIR/dist/modsecurity-configmap.yaml"
+    print_success "ModSecurity configured"
 }
 
 build_images() {
