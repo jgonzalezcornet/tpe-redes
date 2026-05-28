@@ -13,11 +13,11 @@ attack_cases() {
     run_case "DoS /utility/health/down" block "$BASE/utility/health/down"
     run_case "CPU /utility/stress"      block "$BASE/utility/stress/2000000"
     run_case "Arbitrary /utility/store" block -X POST -H "Content-Type: application/json" -d '{"a":"b"}' "$BASE/utility/store"
-    run_case "Leak /utility/headers"    block "$BASE/utility/headers"
 
     print_section "3.3 Sensitive info exposure"
     run_case "Info /info"               block "$BASE/info"
     run_case "Topology /topology"       block "$BASE/topology"
+    run_case "Leak /utility/headers"    block "$BASE/utility/headers"
 
     print_section "3.4.1 SQL Injection"
     run_case "SQLi tautology"           block "$BASE/catalog/search?q=' OR 1=1--"
