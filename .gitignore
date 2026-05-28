@@ -10,6 +10,7 @@ env
 oss-output
 kubeconfig_*
 .idea
+.claude
 node_modules
 .venv
 
