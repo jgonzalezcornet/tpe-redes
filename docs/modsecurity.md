@@ -35,6 +35,10 @@ data:
     SecRuleEngine DetectionOnly
     SecAuditEngine RelevantOnly
     SecAuditLogParts ABIJDEFHZ
+
+    # 3.1 IDOR — block external access to internal /proxy/* endpoints
+    SecRule REQUEST_URI "@beginsWith /proxy/" \
+        "id:1001,phase:1,deny,status:403,log,tag:IDOR,msg:IDOR_proxy_endpoint_blocked"
 ```
 
 Qué hace cada key:
@@ -53,6 +57,10 @@ Directivas del snippet:
 | `SecRuleEngine DetectionOnly` | Evalúa reglas y registra matches en el audit log pero no bloquea. |
 | `SecAuditEngine RelevantOnly` | Audita sólo requests que disparan reglas relevantes (filtra por `SecAuditLogRelevantStatus`, que por default matchea 4xx/5xx excepto 404). |
 | `SecAuditLogParts ABIJDEFHZ` | Qué partes del request/response incluir en el audit log (headers, body, info de matching, etc.). |
+
+Regla custom **id:1001** (mitigación 3.1 IDOR del pre-entrega): bloquea cualquier request cuyo `REQUEST_URI` empiece con `/proxy/` — endpoints internos (`/proxy/carts/{id}`, `/proxy/orders/{id}`) que la UI usa para hablar con cart/orders y que no deberían ser accesibles desde afuera. Es *virtual patching*: la vulnerabilidad real es de autorización en la aplicación, pero el WAF reduce la superficie cerrando el endpoint en el borde.
+
+> Nota sobre `msg`: el pre-entrega usa `msg:'Access to internal proxy endpoints blocked'`. La directiva `modsecurity_rules` de la imagen del ingress controller envuelve el snippet en comillas simples a nivel nginx, así que cualquier `'` adentro lo corta y rompe el reload (`nginx: [emerg] unexpected "I" in ...`). Para mantener todo inline en el ConfigMap usamos `msg:IDOR_proxy_endpoint_blocked` (sin espacios, sin comillas) — mismo efecto, mensaje sin espacios en el audit log.
 
 #### 2. Modificación: `local.sh`
 
@@ -114,6 +122,29 @@ El controller detecta el cambio en el ConfigMap y recarga nginx automáticamente
    - Path traversal `file=../../../../etc/passwd` → 403 (rule 930xxx)
    - Scanner UA `Nikto/2.5` → 403 (rule 913xxx)
    - `GET /catalog` legítimo → 200
+
+6. **Validación de la regla 1001 (IDOR)**:
+
+   *En `DetectionOnly`* (estado por default en el ConfigMap):
+   ```bash
+   curl -s -o /dev/null -w "HTTP %{http_code}\n" http://localhost/proxy/carts/123    # → backend (200/404)
+   curl -s -o /dev/null -w "HTTP %{http_code}\n" http://localhost/proxy/orders/123   # → backend (200/404)
+   ```
+   El request pasa al backend (no se bloquea), pero el audit log captura el match. Como en DetectionOnly el backend responde con su status real (404 normalmente, porque /proxy es interno), `SecAuditEngine RelevantOnly` filtra los 404. Para ver el match en DetectionOnly hay que cambiar temporalmente a `SecAuditEngine On` en el snippet o consultar el audit log cuando el backend devuelve 5xx/4xx≠404. Cuando matchea, la entrada se ve así:
+   ```
+   ModSecurity: Warning. Matched "Operator `BeginsWith' with parameter `/proxy/' against variable `REQUEST_URI' (Value: `/proxy/carts/123' ) [id "1001"] [msg "IDOR_proxy_endpoint_blocked"] [tag "IDOR"] [uri "/proxy/carts/123"]
+   ```
+
+   *En `On`* (probado temporalmente al armar esta sección, después se revirtió):
+   ```
+   /proxy/carts/123  → HTTP 403
+   /proxy/orders/123 → HTTP 403
+   /proxy/whatever   → HTTP 403
+   /                 → HTTP 200
+   /catalog          → HTTP 200
+   /cart             → HTTP 200
+   ```
+   El `attacks.sh` reporta los dos casos 3.1 como `BLOCK` y `happy-path.sh` no genera falsos positivos por esta regla (ningún path legítimo empieza con `/proxy/`).
 
 ---
 
@@ -203,7 +234,7 @@ WAF_TEST_URL=http://otro-host ./src/waf-tests/attacks.sh
 
 ### Estado actual
 
-Hoy sólo está el CRS en `DetectionOnly`. Las reglas custom (IDOR, admin, info, scanner UA) son fases siguientes del roadmap. Si se corren los scripts ahora se esperan muchos "missed" — funciona como checklist: cada fase nueva debería convertir un grupo de `MISS` en `BLOCK`.
+Hoy están en `DetectionOnly`: el CRS completo + la regla custom **1001** (IDOR `/proxy/*`). Las reglas custom restantes (admin, info, scanner UA) son fases siguientes del roadmap. Si se corren los scripts ahora se esperan muchos "missed" porque DetectionOnly no bloquea — funciona como checklist: cada fase nueva debería convertir un grupo de `MISS` en `BLOCK` al pasar a `SecRuleEngine On`.
 
 ---
 
@@ -211,9 +242,9 @@ Hoy sólo está el CRS en `DetectionOnly`. Las reglas custom (IDOR, admin, info,
 
 - [ ] **Fase 2** — Pasar a modo blocking (`SecRuleEngine On`) y validar que los tests e2e siguen pasando. Tunear falsos positivos del CRS con exclusiones si hace falta. `happy-path.sh` es la herramienta para esto.
 - [ ] **Fase 3** — Reglas custom específicas:
-  - IDOR: bloquear `/proxy/*` (id 1001)
-  - Admin endpoints: bloquear `/utility/*` salvo IPs autorizadas (id 2002)
-  - Info: bloquear `/info` y `/topology` (id 1003, 1004)
-  - Scanner UA: bloquear `sqlmap|nikto|nmap|wpscan` en User-Agent (id 4001)
+  - [x] IDOR: bloquear `/proxy/*` (id 1001) — implementada, validada en DetectionOnly y blocking
+  - [ ] Admin endpoints: bloquear `/utility/*` salvo IPs autorizadas (id 2002)
+  - [ ] Info: bloquear `/info` y `/topology` (id 1003, 1004)
+  - [ ] Scanner UA: bloquear `sqlmap|nikto|nmap|wpscan` en User-Agent (id 4001)
 - [ ] **Fase 4** — Tuning del anomaly scoring (`inbound_anomaly_score_threshold`) y rule exclusions según falsos positivos que reporte `happy-path.sh`.
 - [ ] **Fase 5** — Observabilidad: enviar el audit log a un sink centralizado (stdout estructurado, o un sidecar tipo Fluent Bit).

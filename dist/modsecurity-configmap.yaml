@@ -6,3 +6,7 @@ data:
     SecRuleEngine DetectionOnly
     SecAuditEngine RelevantOnly
     SecAuditLogParts ABIJDEFHZ
+
+    # 3.1 IDOR — block external access to internal /proxy/* endpoints
+    SecRule REQUEST_URI "@beginsWith /proxy/" \
+        "id:1001,phase:1,deny,status:403,log,tag:IDOR,msg:IDOR_proxy_endpoint_blocked"
