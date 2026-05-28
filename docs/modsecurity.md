@@ -39,6 +39,11 @@ data:
     # 3.1 IDOR — block external access to internal /proxy/* endpoints
     SecRule REQUEST_URI "@beginsWith /proxy/" \
         "id:1001,phase:1,deny,status:403,log,tag:IDOR,msg:IDOR_proxy_endpoint_blocked"
+
+    # 3.2 Admin endpoints — block /utility/* unless source IP is in the allowlist
+    SecRule REQUEST_URI "@beginsWith /utility/" \
+        "id:2002,phase:1,deny,status:403,log,tag:admin_endpoint,msg:utility_endpoint_blocked,chain"
+        SecRule REMOTE_ADDR "!@ipMatch 127.0.0.1"
 ```
 
 Qué hace cada key:
@@ -60,7 +65,11 @@ Directivas del snippet:
 
 Regla custom **id:1001** (mitigación 3.1 IDOR del pre-entrega): bloquea cualquier request cuyo `REQUEST_URI` empiece con `/proxy/` — endpoints internos (`/proxy/carts/{id}`, `/proxy/orders/{id}`) que la UI usa para hablar con cart/orders y que no deberían ser accesibles desde afuera. Es *virtual patching*: la vulnerabilidad real es de autorización en la aplicación, pero el WAF reduce la superficie cerrando el endpoint en el borde.
 
-> Nota sobre `msg`: el pre-entrega usa `msg:'Access to internal proxy endpoints blocked'`. La directiva `modsecurity_rules` de la imagen del ingress controller envuelve el snippet en comillas simples a nivel nginx, así que cualquier `'` adentro lo corta y rompe el reload (`nginx: [emerg] unexpected "I" in ...`). Para mantener todo inline en el ConfigMap usamos `msg:IDOR_proxy_endpoint_blocked` (sin espacios, sin comillas) — mismo efecto, mensaje sin espacios en el audit log.
+Regla custom **id:2002** (mitigación 3.2 Admin endpoints del pre-entrega): regla *chained* — dispara cuando `REQUEST_URI` empieza con `/utility/` **y** la IP de origen no está en el allowlist. Cubre los endpoints administrativos expuestos (`/utility/panic`, `/utility/health/down`, `/utility/stress/{n}`, `/utility/store`) y también `/utility/headers` del caso 3.3.3 (el pre-entrega aclara que ese caso queda cubierto acá).
+
+> Nota sobre la fuente de IP: el pre-entrega propone `REQUEST_HEADERS:X-Forwarded-For` y plantea que nginx sobrescriba ese header con la IP real del cliente para evitar spoofing. En ingress-nginx esa "sobrescritura" sólo aplica al header forwardeado al upstream — ModSecurity en `phase:1` ve los headers tal como los mandó el cliente. Cuando el cliente no manda XFF (caso típico), la variable queda *undefined* y el chain no matchea, por lo que el `deny` nunca dispara. Para cerrar esto usamos `REMOTE_ADDR`, que es la IP que nginx ve en la conexión TCP — no es spoofable a nivel HTTP y siempre existe. En producción detrás de un LB habría que volver a XFF + configurar `trusted-proxies` para que ese valor sea confiable. Allowlist actual: `127.0.0.1` (mínima para el PoC; ningún test corre desde loopback dentro del cluster).
+
+> Nota sobre `msg`: el pre-entrega usa `msg:'...'`. La directiva `modsecurity_rules` de la imagen del ingress controller envuelve el snippet en comillas simples a nivel nginx, así que cualquier `'` adentro lo corta y rompe el reload (`nginx: [emerg] unexpected "I" in ...`). Para mantener todo inline en el ConfigMap usamos `msg:IDOR_proxy_endpoint_blocked` / `msg:utility_endpoint_blocked` (sin espacios, sin comillas) — mismo efecto, mensaje sin espacios en el audit log.
 
 #### 2. Modificación: `local.sh`
 
@@ -145,6 +154,29 @@ El controller detecta el cambio en el ConfigMap y recarga nginx automáticamente
    /cart             → HTTP 200
    ```
    El `attacks.sh` reporta los dos casos 3.1 como `BLOCK` y `happy-path.sh` no genera falsos positivos por esta regla (ningún path legítimo empieza con `/proxy/`).
+
+7. **Validación de la regla 2002 (admin endpoints)**:
+
+   *En `DetectionOnly`* — los requests pasan al backend (`/utility/headers` → 200, `/utility/store` POST → 200) y el audit log captura el match. Para verlo hay que poner `SecAuditEngine On` temporalmente (los 200 no son "relevantes" para `RelevantOnly`). Entrada típica:
+   ```
+   ModSecurity: Warning. Matched "Operator `IpMatch' with parameter `127.0.0.1' against variable `REMOTE_ADDR' (Value: `192.168.65.1' ) [id "2002"] [msg "utility_endpoint_blocked"] [tag "admin_endpoint"] [uri "/utility/headers"]
+   ```
+   El `REMOTE_ADDR` que ve nginx en este entorno es `192.168.65.1` (gateway interno de Docker Desktop), que no está en el allowlist → la regla matchea.
+
+   > Cuidado en DetectionOnly: `/utility/panic` y `/utility/health/down` afectan al pod de UI (crashea / lo marca unhealthy). En DetectionOnly el request llega al backend igual, así que **no probar esos dos endpoints en este modo** salvo que se quiera ver al UI reiniciarse. Para validación usar `/utility/headers` y `/utility/store`.
+
+   *En `On`* (probado temporalmente, después se revirtió):
+   ```
+   /utility/panic        → HTTP 403
+   /utility/health/down  → HTTP 403
+   /utility/stress/N     → HTTP 403
+   /utility/store POST   → HTTP 403
+   /utility/headers      → HTTP 403
+   /                     → HTTP 200
+   /catalog              → HTTP 200
+   /cart                 → HTTP 200
+   ```
+   `/utility/panic` no llega a la UI (queda en el WAF), así que el pod no crashea — efecto positivo del modo blocking. `attacks.sh` reporta los 4 casos 3.2 + el `Leak /utility/headers` de 3.3 como `BLOCK`. `happy-path.sh` no genera falsos positivos.
 
 ---
 
@@ -234,7 +266,7 @@ WAF_TEST_URL=http://otro-host ./src/waf-tests/attacks.sh
 
 ### Estado actual
 
-Hoy están en `DetectionOnly`: el CRS completo + la regla custom **1001** (IDOR `/proxy/*`). Las reglas custom restantes (admin, info, scanner UA) son fases siguientes del roadmap. Si se corren los scripts ahora se esperan muchos "missed" porque DetectionOnly no bloquea — funciona como checklist: cada fase nueva debería convertir un grupo de `MISS` en `BLOCK` al pasar a `SecRuleEngine On`.
+Hoy están en `DetectionOnly`: el CRS completo + las reglas custom **1001** (IDOR `/proxy/*`) y **2002** (admin `/utility/*` con IP allowlist). Las reglas custom restantes (info `/info` y `/topology`, scanner UA) son fases siguientes del roadmap. Si se corren los scripts ahora se esperan varios "missed" porque DetectionOnly no bloquea — funciona como checklist: cada fase nueva debería convertir un grupo de `MISS` en `BLOCK` al pasar a `SecRuleEngine On`.
 
 ---
 
@@ -243,7 +275,7 @@ Hoy están en `DetectionOnly`: el CRS completo + la regla custom **1001** (IDOR 
 - [ ] **Fase 2** — Pasar a modo blocking (`SecRuleEngine On`) y validar que los tests e2e siguen pasando. Tunear falsos positivos del CRS con exclusiones si hace falta. `happy-path.sh` es la herramienta para esto.
 - [ ] **Fase 3** — Reglas custom específicas:
   - [x] IDOR: bloquear `/proxy/*` (id 1001) — implementada, validada en DetectionOnly y blocking
-  - [ ] Admin endpoints: bloquear `/utility/*` salvo IPs autorizadas (id 2002)
+  - [x] Admin endpoints: bloquear `/utility/*` salvo IPs autorizadas (id 2002) — implementada con `REMOTE_ADDR` (en vez de XFF), validada en DetectionOnly y blocking
   - [ ] Info: bloquear `/info` y `/topology` (id 1003, 1004)
   - [ ] Scanner UA: bloquear `sqlmap|nikto|nmap|wpscan` en User-Agent (id 4001)
 - [ ] **Fase 4** — Tuning del anomaly scoring (`inbound_anomaly_score_threshold`) y rule exclusions según falsos positivos que reporte `happy-path.sh`.

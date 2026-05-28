@@ -10,3 +10,8 @@ data:
     # 3.1 IDOR — block external access to internal /proxy/* endpoints
     SecRule REQUEST_URI "@beginsWith /proxy/" \
         "id:1001,phase:1,deny,status:403,log,tag:IDOR,msg:IDOR_proxy_endpoint_blocked"
+
+    # 3.2 Admin endpoints — block /utility/* unless source IP is in the allowlist
+    SecRule REQUEST_URI "@beginsWith /utility/" \
+        "id:2002,phase:1,deny,status:403,log,tag:admin_endpoint,msg:utility_endpoint_blocked,chain"
+        SecRule REMOTE_ADDR "!@ipMatch 127.0.0.1"
