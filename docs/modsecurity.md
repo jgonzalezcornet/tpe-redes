@@ -12,7 +12,7 @@ Roadmap completo de la integración de ModSecurity como WAF sobre el ingress de 
 
 ## Decisiones de diseño
 
-1. **Modo de arranque: `DetectionOnly`.** ModSecurity loguea las reglas que matchean pero no bloquea requests. Permite observar el comportamiento del WAF contra los tests e2e y el load generator antes de pasar a modo blocking.
+1. **Modo de arranque: `DetectionOnly`, luego `On`.** Se arrancó en `DetectionOnly` (ModSecurity loguea las reglas que matchean pero no bloquea) para observar el comportamiento del WAF contra los tests e2e y el load generator. Validado eso, se pasó a `SecRuleEngine On` (modo blocking) — estado actual del ConfigMap. Ver [Fase 2 + 3](#fase-2--3--modo-blocking--reglas-custom-restantes).
 2. **Alcance: global vía ConfigMap del controller.** Como hay un único Ingress en el proyecto, configurar globalmente es más simple que anotación por anotación. Si en el futuro hace falta WAF diferenciado por servicio, se puede mover a annotations.
 3. **Formato: manifiesto separado + patch.** Mantenemos la config de ModSecurity en `dist/modsecurity-configmap.yaml` (separado del `dist/kubernetes.yaml` de la app) y la aplicamos con `kubectl patch --type merge`, no con `kubectl apply`. Razón: el ConfigMap `ingress-nginx-controller` lo crea upstream con labels y keys propias (`allow-snippet-annotations`), y un `apply` con un manifiesto parcial las borraría. El merge patch sólo toca las keys que nos interesan.
 
@@ -23,6 +23,8 @@ Roadmap completo de la integración de ModSecurity como WAF sobre el ingress de 
 ### Cambios
 
 #### 1. Nuevo archivo: `dist/modsecurity-configmap.yaml`
+
+> El snippet de abajo es el estado **inicial** de Fase 1 (`DetectionOnly` + reglas 1001/2002). El contenido actual del archivo —modo `On` y las reglas 1003/1004/4001 agregadas— está en [Fase 2 + 3](#fase-2--3--modo-blocking--reglas-custom-restantes).
 
 Merge patch que agrega tres keys al ConfigMap del ingress controller:
 
@@ -180,6 +182,71 @@ El controller detecta el cambio en el ConfigMap y recarga nginx automáticamente
 
 ---
 
+## Fase 2 + 3 — Modo blocking + reglas custom restantes
+
+Confirmado el comportamiento en `DetectionOnly`, se pasó el WAF a modo blocking y se completaron las reglas custom pendientes del pre-entrega. Estado actual de `dist/modsecurity-configmap.yaml`:
+
+```yaml
+data:
+  enable-modsecurity: "true"
+  enable-owasp-modsecurity-crs: "true"
+  modsecurity-snippet: |
+    Include /etc/nginx/modsecurity/modsecurity.conf
+    SecRuleEngine On
+    SecAuditEngine RelevantOnly
+    SecAuditLogParts ABIJDEFHZ
+
+    # 3.1 IDOR — block external access to internal /proxy/* endpoints
+    SecRule REQUEST_URI "@beginsWith /proxy/" \
+        "id:1001,phase:1,deny,status:403,log,tag:IDOR,msg:IDOR_proxy_endpoint_blocked"
+
+    # 3.2 Admin endpoints — block /utility/* unless source IP is in the allowlist
+    SecRule REQUEST_URI "@beginsWith /utility/" \
+        "id:2002,phase:1,deny,status:403,log,tag:admin_endpoint,msg:utility_endpoint_blocked,chain"
+        SecRule REMOTE_ADDR "!@ipMatch 127.0.0.1"
+
+    # 3.3 Sensitive info exposure — block /info and /topology
+    SecRule REQUEST_URI "@streq /info" \
+        "id:1003,phase:1,deny,status:403,log,tag:info_endpoint,msg:info_endpoint_blocked"
+    SecRule REQUEST_URI "@streq /topology" \
+        "id:1004,phase:1,deny,status:403,log,tag:info_endpoint,msg:topology_endpoint_blocked"
+
+    # 3.4.3 Malicious scanner User-Agent detection
+    SecRule REQUEST_HEADERS:User-Agent "@rx (?i:(sqlmap|nikto|nmap|wpscan))" \
+        "id:4001,phase:1,deny,status:403,log,tag:scanner,msg:malicious_scanner_detected"
+```
+
+Cambios respecto de Fase 1:
+
+| Cambio | Detalle |
+|--------|---------|
+| `SecRuleEngine On` | Pasa de detectar a **bloquear**: las reglas que matchean devuelven `403` antes de llegar al backend. |
+| Reglas **1003** / **1004** (mitigación 3.3) | `@streq /info` y `@streq /topology` — match exacto del path. Bloquean los endpoints que filtran metadata interna (`/info`) y la topología de microservicios (`/topology`). Se usa `@streq` (igualdad exacta) en lugar de `@beginsWith` para no pisar otros paths legítimos que pudieran empezar con esos prefijos. El caso 3.3.3 (`/utility/headers`) ya queda cubierto por la regla 2002. |
+| Regla **4001** (mitigación 3.4.3) | `@rx (?i:(sqlmap\|nikto\|nmap\|wpscan))` sobre el header `User-Agent` — bloquea herramientas de scanning automatizado por su firma de UA, case-insensitive. |
+
+### Cómo verificar (modo blocking)
+
+Con el cluster corriendo (`kind-the-store`), los vectores de 3.1, 3.2 y 3.3 devuelven `403` y el tráfico legítimo pasa con `200`:
+
+```bash
+# 3.1 IDOR
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost/proxy/carts/123     # 403
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost/proxy/orders/123    # 403
+# 3.2 Admin (no probar /utility/panic ni /utility/health/down salvo que se quiera; en On igual quedan en el WAF)
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost/utility/store       # 403
+# 3.3 Info
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost/info                # 403
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost/topology            # 403
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost/utility/headers     # 403 (vía regla 2002)
+# Happy path
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost/                    # 200
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost/catalog             # 200
+```
+
+Verificado el 2026-05-30 contra el cluster local: `rules loaded inline: 12/801/0` (12 reglas custom + ~800 del CRS) y todos los vectores 3.1/3.2/3.3 devolviendo `403`, happy path `200`. En modo `On` ya no hace falta mirar el audit log para confirmar detección — el status code lo refleja directo, así que `attacks.sh` y `happy-path.sh` sirven como validación directa.
+
+---
+
 ## Testing del WAF
 
 Los Cypress e2e (`src/e2e/`) sólo cubren happy path funcional — no disparan payloads maliciosos. Para validar el WAF se incluyen tres scripts de bash en `src/waf-tests/` que ejercitan los casos del pre-entrega.
@@ -235,7 +302,7 @@ El runner mira el HTTP status code de la respuesta:
 - **Caso `block`** (ataques): éxito si status = `403`. Cualquier otra cosa cuenta como **missed attack**.
 - **Caso `allow`** (legítimo): éxito si status ≠ `403`. Si vuelve `403` cuenta como **false positive**.
 
-> Nota: este criterio asume `SecRuleEngine On`. En modo `DetectionOnly` el WAF nunca bloquea (siempre devuelve el status del backend), entonces todos los ataques cuentan como "missed". Para verificar detección sin bloquear hay que mirar los logs del controller (`kubectl -n ingress-nginx logs deploy/ingress-nginx-controller | grep ModSecurity`).
+> Nota: este criterio asume `SecRuleEngine On` — que es el modo actual del ConfigMap, así que los scripts corren directo. (Si se volviera a `DetectionOnly` el WAF nunca bloquea y todos los ataques contarían como "missed"; ahí habría que mirar los logs del controller con `kubectl -n ingress-nginx logs deploy/ingress-nginx-controller | grep ModSecurity`.)
 
 ### Estadísticas que imprime
 
@@ -266,17 +333,17 @@ WAF_TEST_URL=http://otro-host ./src/waf-tests/attacks.sh
 
 ### Estado actual
 
-Hoy están en `DetectionOnly`: el CRS completo + las reglas custom **1001** (IDOR `/proxy/*`) y **2002** (admin `/utility/*` con IP allowlist). Las reglas custom restantes (info `/info` y `/topology`, scanner UA) son fases siguientes del roadmap. Si se corren los scripts ahora se esperan varios "missed" porque DetectionOnly no bloquea — funciona como checklist: cada fase nueva debería convertir un grupo de `MISS` en `BLOCK` al pasar a `SecRuleEngine On`.
+El WAF está en modo blocking (`SecRuleEngine On`) con el CRS completo + las cuatro reglas custom: **1001** (IDOR `/proxy/*`), **2002** (admin `/utility/*` con IP allowlist, cubre también 3.3.3 `/utility/headers`), **1003** (`/info`), **1004** (`/topology`) y **4001** (scanner UA). Cubre los casos 3.1, 3.2, 3.3 y 3.4.3 del pre-entrega; los vectores genéricos de 3.4.1 (SQLi/XSS) y 3.4.2 (path traversal) los maneja el CRS. Con esto, `attacks.sh` debería reportar todos los casos como `BLOCK` y `happy-path.sh` sin falsos positivos.
 
 ---
 
 ## Próximas fases (pendientes)
 
-- [ ] **Fase 2** — Pasar a modo blocking (`SecRuleEngine On`) y validar que los tests e2e siguen pasando. Tunear falsos positivos del CRS con exclusiones si hace falta. `happy-path.sh` es la herramienta para esto.
-- [ ] **Fase 3** — Reglas custom específicas:
+- [x] **Fase 2** — Pasar a modo blocking (`SecRuleEngine On`). Hecho (commit `a0bacce`), validado contra el cluster local: vectores 3.1/3.2/3.3 → 403, happy path → 200. Pendiente seguir tuneando falsos positivos del CRS con `happy-path.sh` si aparecen (ver Fase 4).
+- [x] **Fase 3** — Reglas custom específicas:
   - [x] IDOR: bloquear `/proxy/*` (id 1001) — implementada, validada en DetectionOnly y blocking
   - [x] Admin endpoints: bloquear `/utility/*` salvo IPs autorizadas (id 2002) — implementada con `REMOTE_ADDR` (en vez de XFF), validada en DetectionOnly y blocking
-  - [ ] Info: bloquear `/info` y `/topology` (id 1003, 1004)
-  - [ ] Scanner UA: bloquear `sqlmap|nikto|nmap|wpscan` en User-Agent (id 4001)
-- [ ] **Fase 4** — Tuning del anomaly scoring (`inbound_anomaly_score_threshold`) y rule exclusions según falsos positivos que reporte `happy-path.sh`.
+  - [x] Info: bloquear `/info` y `/topology` (id 1003, 1004) — implementada con `@streq`, validada en blocking
+  - [x] Scanner UA: bloquear `sqlmap|nikto|nmap|wpscan` en User-Agent (id 4001) — implementada
+- [ ] **Fase 4** — Tuning del anomaly scoring (`inbound_anomaly_score_threshold`) y rule exclusions según falsos positivos que reporte `happy-path.sh`. (Pre-entrega 3.4: paranoia level 2 + análisis de falsos positivos — pendiente.)
 - [ ] **Fase 5** — Observabilidad: enviar el audit log a un sink centralizado (stdout estructurado, o un sidecar tipo Fluent Bit).
