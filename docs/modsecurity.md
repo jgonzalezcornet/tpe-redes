@@ -249,6 +249,8 @@ Verificado el 2026-05-30 contra el cluster local: `rules loaded inline: 12/801/0
 
 ## Testing del WAF
 
+> Para reproducir los ataques paso a paso (con vs sin WAF, cómo togglear el WAF, tabla de resultados esperados) ver la guía de demostración: [`waf-demo.md`](./waf-demo.md).
+
 Los Cypress e2e (`src/e2e/`) sólo cubren happy path funcional — no disparan payloads maliciosos. Para validar el WAF se incluyen tres scripts de bash en `src/waf-tests/` que ejercitan los casos del pre-entrega.
 
 ### Estructura

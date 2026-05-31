@@ -124,7 +124,7 @@ install_ingress() {
 }
 
 configure_modsecurity() {
-    print_status "Configuring ModSecurity (DetectionOnly + OWASP CRS) on ingress controller..."
+    print_status "Configuring ModSecurity (blocking mode + OWASP CRS) on ingress controller..."
     kubectl patch configmap ingress-nginx-controller \
         -n ingress-nginx \
         --type merge \
