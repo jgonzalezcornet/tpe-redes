@@ -20,11 +20,11 @@ attack_cases() {
     run_case "Leak /utility/headers"    block "$BASE/utility/headers"
 
     print_section "3.4.1 SQL Injection"
-    run_case "SQLi tautology"           block "$BASE/catalog/search?q=' OR 1=1--"
-    run_case "SQLi union select"        block "$BASE/catalog/search?q=' UNION SELECT password FROM users--"
+    run_case "SQLi tautology"           block --get --data-urlencode "q=' OR 1=1--" "$BASE/catalog/search"
+    run_case "SQLi union select"        block --get --data-urlencode "q=' UNION SELECT password FROM users--" "$BASE/catalog/search"
 
     print_section "3.4.1 XSS"
-    run_case "XSS img onerror"          block "$BASE/catalog/search?q=<img src=x onerror=alert(1)>"
+    run_case "XSS img onerror"          block --get --data-urlencode "q=<img src=x onerror=alert(1)>" "$BASE/catalog/search"
 
     print_section "3.4.2 Path traversal"
     run_case "Traversal /etc/passwd"    block "$BASE/catalog/image?file=../../../../etc/passwd"
