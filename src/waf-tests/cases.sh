@@ -19,6 +19,7 @@ attack_cases() {
     run_case "Topology /topology"       block "$BASE/topology"
     run_case "Leak /utility/headers"    block "$BASE/utility/headers"
 
+    # 3.4.x: con WAF on → 403 (CRS o regla 4001). Sin WAF el backend expone la vuln (200/500); estos scripts solo validan el WAF.
     print_section "3.4.1 SQL Injection"
     run_case "SQLi tautology"           block --get --data-urlencode "q=' OR 1=1--" "$BASE/catalog/search"
     run_case "SQLi union select"        block --get --data-urlencode "q=' UNION SELECT password FROM users--" "$BASE/catalog/search"
@@ -46,6 +47,7 @@ happy_cases() {
     run_case "Checkout page"            allow "$BASE/checkout"
 
     print_section "Legitimate search queries"
+    run_case "Search benign q=test"     allow "$BASE/catalog/search?q=test"
     run_case "Search single word"       allow "$BASE/catalog/search?q=quill"
     run_case "Search with space"        allow "$BASE/catalog/search?q=aqua+ace"
     run_case "Search numeric"           allow "$BASE/catalog/search?q=150"

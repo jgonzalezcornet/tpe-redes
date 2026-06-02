@@ -21,6 +21,7 @@ type CatalogRepository interface {
 	CountProducts(tags []string, ctx context.Context) (int, error)
 	GetProduct(id string, ctx context.Context) (*model.Product, error)
 	GetTags(ctx context.Context) ([]model.Tag, error)
+	SearchProductsUnsafe(q string, ctx context.Context) ([]model.Product, error)
 }
 
 func createMySQLDatabase(config config.DatabaseConfiguration) (*gorm.DB, error) {
@@ -191,4 +192,17 @@ func (db *Database) GetTags(ctx context.Context) ([]model.Tag, error) {
 	}
 
 	return tags, err
+}
+
+func (db *Database) SearchProductsUnsafe(q string, ctx context.Context) ([]model.Product, error) {
+	products := []model.Product{}
+	sql := fmt.Sprintf(
+		"SELECT id, name, description, price FROM products WHERE name LIKE '%%%s%%' ORDER BY name ASC",
+		q,
+	)
+	err := db.DB.WithContext(ctx).Raw(sql).Scan(&products).Error
+	if err != nil {
+		return nil, err
+	}
+	return products, nil
 }

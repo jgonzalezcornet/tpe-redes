@@ -108,6 +108,8 @@ func main() {
 	catalog.Use(otelgin.Middleware("catalog-server"))
 
 	catalog.GET("/products", c.GetProducts)
+	catalog.GET("/search", c.Search)
+	catalog.GET("/image", c.GetImage)
 
 	catalog.GET("/size", c.CatalogSize)
 	catalog.GET("/tags", c.ListTags)

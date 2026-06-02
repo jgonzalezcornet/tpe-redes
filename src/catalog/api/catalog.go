@@ -48,6 +48,10 @@ func (a *CatalogAPI) GetSize(tags []string, ctx context.Context) (int, error) {
 	return a.repository.CountProducts(tags, ctx)
 }
 
+func (a *CatalogAPI) SearchProductsUnsafe(q string, ctx context.Context) ([]model.Product, error) {
+	return a.repository.SearchProductsUnsafe(q, ctx)
+}
+
 // NewCatalogAPI constructor
 func NewCatalogAPI(repository repository.CatalogRepository) (*CatalogAPI, error) {
 	return &CatalogAPI{

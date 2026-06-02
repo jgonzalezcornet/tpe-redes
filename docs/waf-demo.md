@@ -17,7 +17,7 @@ Los scripts en `src/waf-tests/` ejercitan todos los casos del pre-entrega (mapeo
 
 ```bash
 ./src/waf-tests/attacks.sh      # ataques → se esperan 403 (18/18 con WAF on)
-./src/waf-tests/happy-path.sh   # tráfico legítimo → se esperan 200 (12/12)
+./src/waf-tests/happy-path.sh   # tráfico legítimo → se esperan 200 (13/13)
 ./src/waf-tests/mixed.sh        # ambos
 ```
 
@@ -59,17 +59,27 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost/info   # 200 sin WAF, 
 | 3.3 / 3.3.3 | `curl http://localhost/utility/headers` | 200 | **403** |
 | 3.3 Info | `curl http://localhost/info` | 200 | **403** |
 | 3.3 Topology | `curl http://localhost/topology` | 200 | **403** |
-| 3.4.1 SQLi | `curl --get --data-urlencode "q=' OR 1=1--" http://localhost/catalog/search` | 500² | **403** |
-| 3.4.1 SQLi | `curl --get --data-urlencode "q=' UNION SELECT password FROM users--" http://localhost/catalog/search` | 500² | **403** |
-| 3.4.1 XSS | `curl --get --data-urlencode "q=<img src=x onerror=alert(1)>" http://localhost/catalog/search` | 500² | **403** |
-| 3.4.2 Traversal | `curl "http://localhost/catalog/image?file=../../../../etc/passwd"` | 500² | **403** |
-| 3.4.2 Traversal | `curl "http://localhost/catalog/image?file=../../../../proc/self/environ"` | 500² | **403** |
+| 3.4.1 SQLi | `curl --get --data-urlencode "q=' OR 1=1--" http://localhost/catalog/search` | 200² (todos los productos) | **403** |
+| 3.4.1 SQLi | `curl --get --data-urlencode "q=' UNION SELECT password FROM users--" http://localhost/catalog/search` | 200 o 500² | **403** |
+| 3.4.1 XSS | `curl --get --data-urlencode "q=<img src=x onerror=alert(1)>" http://localhost/catalog/search` | 200² (`query` reflejado en JSON) | **403** |
+| 3.4.2 Traversal | `curl "http://localhost/catalog/image?file=../../../../etc/passwd"` | 200² (contenido del archivo) | **403** |
+| 3.4.2 Traversal | `curl "http://localhost/catalog/image?file=../../../../proc/self/environ"` | 200² (contenido del archivo) | **403** |
 | 3.4.3 Scanner | `curl -A "sqlmap/1.7" "http://localhost/catalog/search?q=test"` | 200 | **403** |
 | 3.4.3 Scanner | `curl -A "Nikto/2.5" "http://localhost/catalog/search?q=test"` | 200 | **403** |
 
 ¹ `/proxy/orders/123` devuelve `404` sin WAF porque el backend no tiene órdenes para ese id, pero el request **llegó al backend** — el punto es que el endpoint es accesible. Con WAF se corta con `403` antes de llegar.
 
-² Los vectores de input (SQLi/XSS/traversal) devuelven `500` sin WAF porque la app no sanitiza el input y rompe — justamente la vulnerabilidad que el pre-entrega demuestra. Con WAF el CRS los frena con `403`.
+² Sin WAF el request **llega al catalog** y la vulnerabilidad se manifiesta de verdad: SQLi puede devolver el catálogo completo (`200` + JSON), XSS refleja el payload en el campo `query`, y path traversal devuelve el contenido del archivo leído (`200`). Con WAF el CRS bloquea en el ingress con `403` y el backend no ejecuta nada. Para ver el impacto: `curl -s ... | head` (SQLi/XSS) o `curl -s .../image?file=../../../../etc/passwd | head` (traversal).
+
+### 3.4 — Protección de inputs (implementación)
+
+| Endpoint | Servicio | Descripción |
+|----------|----------|-------------|
+| `GET /catalog/search?q=` | Catalog (Go) → expuesto vía UI (proxy) | Búsqueda con SQL concatenado; respuesta JSON con campo `query` sin escapar |
+| `GET /catalog/image?file=` | Catalog (Go) → expuesto vía UI (proxy) | `filepath.Join` + `ReadFile` sin validar `..`; devuelve bytes del path resuelto |
+| Scanner UA | Solo WAF (regla `4001`) | `sqlmap`, `nikto`, `nmap`, `wpscan` en `User-Agent` |
+
+Prueba manual desde el browser: en `http://localhost/catalog` hay un formulario de búsqueda que hace GET a `/catalog/search` (muestra JSON). Para ataques usar `curl` con `--data-urlencode` como en la tabla.
 
 > **Importante (SQLi/XSS):** usar `--get --data-urlencode`. Si se pasa el payload crudo en la URL (`...?q=' OR 1=1--`), `curl` arma un request line malformado y nginx lo rechaza antes de ModSecurity (status `000`/`400`) — no es un resultado válido para la demo.
 

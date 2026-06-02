@@ -50,6 +50,8 @@ USER appuser
 
 COPY --chown=appuser:appuser --from=build-env /appsrc/main /app/
 
+COPY --chown=appuser:appuser demoimages/product.jpg /app/catalog-images/product.jpg
+
 COPY ./ATTRIBUTION.md ./LICENSES.md
 
 ENV GIN_MODE=release
