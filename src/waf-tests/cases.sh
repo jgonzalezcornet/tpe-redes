@@ -51,6 +51,11 @@ happy_cases() {
     run_case "Search single word"       allow "$BASE/catalog/search?q=quill"
     run_case "Search with space"        allow "$BASE/catalog/search?q=aqua+ace"
     run_case "Search numeric"           allow "$BASE/catalog/search?q=150"
+    # Apóstrofe benigno (nombre tipo "john's"): verifica que el WAF NO haga falso
+    # positivo con un metacarácter SQLi en input legítimo (el WAF filtra patrones
+    # de inyección, no comillas sueltas). El backend devuelve 500 porque la SQLi
+    # sin parametrizar rompe la query — es bug de app, no del WAF; el runner lo
+    # marca como "backend 5xx", no como pass limpio. No es un caso de ataque.
     run_case "Search apostrophe"        allow "$BASE/catalog/search?q=john%27s"
 
     print_section "Legitimate image fetch"

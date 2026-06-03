@@ -14,6 +14,7 @@ TOTAL=0
 CORRECT=0
 MISSED=0
 FALSE_POS=0
+BACKEND_ERR=0
 
 BASE="${WAF_TEST_URL:-http://localhost}"
 
@@ -39,6 +40,12 @@ run_case() {
         if [ "$status" = "403" ]; then
             printf "  ${RED}✗ FP   ${NC}  %-40s (expected pass, got %s)\n" "$name" "$status"
             FALSE_POS=$((FALSE_POS + 1))
+        elif [ "$status" -ge 500 ] 2>/dev/null; then
+            # No es un falso positivo del WAF (no lo bloqueó), pero la request
+            # falló en el backend: se reporta aparte para no contarlo como pass limpio.
+            printf "  ${YELLOW}⚠ PASS*${NC}  %-40s (sin bloqueo del WAF, pero backend %s)\n" "$name" "$status"
+            CORRECT=$((CORRECT + 1))
+            BACKEND_ERR=$((BACKEND_ERR + 1))
         else
             printf "  ${GREEN}✓ PASS ${NC}  %-40s (HTTP %s)\n" "$name" "$status"
             CORRECT=$((CORRECT + 1))
@@ -70,6 +77,7 @@ print_stats() {
     printf "  %-22s %d\n" "Correct:"         "$CORRECT"
     printf "  %-22s %d\n" "Missed attacks:"  "$MISSED"
     printf "  %-22s %d\n" "False positives:" "$FALSE_POS"
+    printf "  %-22s %d\n" "Backend errors (5xx):" "$BACKEND_ERR"
 
     local pct=0
     [ $TOTAL -gt 0 ] && pct=$((CORRECT * 100 / TOTAL))
@@ -77,7 +85,14 @@ print_stats() {
     echo ""
 
     if [ $MISSED -eq 0 ] && [ $FALSE_POS -eq 0 ]; then
-        printf "  ${GREEN}All cases handled as expected.${NC}\n\n"
+        if [ $BACKEND_ERR -gt 0 ]; then
+            # El WAF se comportó bien (sin falsos negativos ni positivos); el 5xx
+            # es del backend (p.ej. la SQLi rompe búsquedas con apóstrofe). No
+            # afecta el exit code, que mide la corrección del WAF.
+            printf "  ${GREEN}WAF OK (sin falsos positivos ni negativos).${NC} ${YELLOW}%d request(s) pasaron el WAF pero el backend devolvió 5xx — ver arriba.${NC}\n\n" "$BACKEND_ERR"
+        else
+            printf "  ${GREEN}All cases handled as expected.${NC}\n\n"
+        fi
         return 0
     else
         printf "  ${YELLOW}Some cases need attention.${NC}\n\n"
