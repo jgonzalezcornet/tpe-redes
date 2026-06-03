@@ -7,6 +7,22 @@ data:
     SecAuditEngine RelevantOnly
     SecAuditLogParts ABIJDEFHZ
 
+    # 3.4 CRS tuning — paranoia level 2 (recomendado por la doc del CRS para un
+    # "off-the-shelf online shop"). Va ANTES del CRS a propósito: el snippet se
+    # carga antes que el CRS y su init es set-if-unset, así que este valor gana.
+    # El anomaly threshold se deja en el default del CRS (5 = bloquea ante una
+    # sola regla critica); subirlo solo cambiaria FP por deteccion de senales
+    # debiles (ver docs/modsecurity.md, Fase 4).
+    SecAction \
+        "id:900100,phase:1,nolog,pass,t:none,setvar:tx.blocking_paranoia_level=2"
+
+    # 3.4 Rule exclusion (false-positive tuning) — en PL2 la regla 932200 "RCE
+    # Bypass Technique" matchea simbolos aritmeticos (*, /) en busquedas
+    # legitimas (p.ej. codigos de producto). Se desactiva SOLO para el arg `q`
+    # de /catalog/search; SQLi/XSS (942xxx/941xxx) siguen activos en ese campo.
+    SecRule REQUEST_URI "@beginsWith /catalog/search" \
+        "id:900200,phase:1,pass,nolog,ctl:ruleRemoveTargetById=932200;ARGS:q"
+
     # 3.1 IDOR — block external access to internal /proxy/* endpoints
     SecRule REQUEST_URI "@beginsWith /proxy/" \
         "id:1001,phase:1,deny,status:403,log,tag:IDOR,msg:IDOR_proxy_endpoint_blocked"
