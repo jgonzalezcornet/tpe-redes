@@ -85,6 +85,20 @@ Run load generator tests to validate system performance:
 
 The load generator will run performance tests against your local cluster for 10 minutes (or until manually stopped) to validate system behavior under load.
 
+## 🛡️ WAF (ModSecurity + OWASP CRS)
+
+El cluster despliega un Web Application Firewall en el borde (ModSecurity + OWASP CRS sobre el ingress-nginx), configurado vía `dist/modsecurity-configmap.yaml` y aplicado automáticamente por `local.sh`. Cubre los casos del pre-entrega (IDOR, endpoints administrativos, exposición de info sensible, SQLi/XSS/path-traversal, detección de scanners) y corre en **paranoia level 2** con anomaly threshold 5 y una exclusión scopeada.
+
+```bash
+# Validar el WAF (con el cluster levantado):
+./src/waf-tests/attacks.sh       # ataques del pre-entrega → 403 (18/18)
+./src/waf-tests/happy-path.sh    # tráfico legítimo → 200 (13/13)
+```
+
+Documentación:
+- [`docs/modsecurity.md`](./docs/modsecurity.md) — reglas, implementación y el análisis de tuning del CRS (paranoia level, anomaly scoring, rule exclusions).
+- [`docs/waf-demo.md`](./docs/waf-demo.md) — runbook para reproducir los ataques (con vs. sin WAF) y la demo del tuning.
+
 ---
 
 **The Store** - Built with ❤️ for modern e-commerce

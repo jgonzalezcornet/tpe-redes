@@ -7,7 +7,7 @@ Para el detalle de las reglas y la implementación ver [`modsecurity.md`](./mods
 ## Prerrequisitos
 
 - Cluster local levantado (`./local.sh create-cluster`) y la app accesible en `http://localhost`.
-- El WAF queda activo en modo blocking (`SecRuleEngine On`) por default tras `create-cluster`.
+- El WAF queda activo en modo blocking (`SecRuleEngine On`) por default tras `create-cluster`, con el CRS en **paranoia level 2** + una **exclusión scopeada** (regla 932200 sobre `ARGS:q` en `/catalog/search`). La justificación de esos valores está en [`modsecurity.md` → Fase 4](./modsecurity.md#fase-4--paranoia-level-anomaly-scoring-y-rule-exclusions-pre-entrega-34).
 
 ---
 
@@ -94,6 +94,41 @@ Estos **afectan el cluster** sin WAF, así que en la demo conviene mostrarlos so
 | 3.2.3 CPU | `curl http://localhost/utility/stress/2000000` | CPU-burn, degrada rendimiento | **403** |
 
 Si se quiere demostrar el impacto sin WAF, hacerlo en un cluster descartable y recrearlo después (`./local.sh rebuild-cluster`).
+
+---
+
+## Opción C — Demo del tuning del CRS (3.4: paranoia / anomaly / exclusiones)
+
+Para demostrar el ajuste fino del CRS (no solo el bloqueo binario) hay scripts dedicados en `demo-scripts/crs-tuning/` y `src/waf-tests/`.
+
+**Walkthrough en vivo (3 actos, con pausas para narrar):**
+
+```bash
+./demo-scripts/crs-tuning/demo-flip.sh
+```
+
+Muestra cómo una búsqueda legítima con símbolos (`q=1+2-3*4/5=6`) **pasa en PL1**, se vuelve un **falso positivo (403) en PL2** (regla CRS 932200), y se arregla de dos formas: la **exclusión quirúrgica** (el FP pasa y SQLi/XSS siguen bloqueados) vs. subir el **anomaly threshold** (instrumento grueso). Restaura el ConfigMap al final.
+
+**Aplicar estados sueltos a mano:**
+
+```bash
+./demo-scripts/crs-tuning/set-crs.sh --pl 2                 # sube paranoia a 2
+./demo-scripts/crs-tuning/set-crs.sh --pl 2 --exclude-fp    # + exclusión (= default)
+./demo-scripts/crs-tuning/set-crs.sh --pl 2 --threshold 20  # + threshold alto
+./demo-scripts/turn-waf-on.sh                               # restaura el default committeado
+```
+
+**Datos y gráficos (análisis del pre-entrega 3.4):**
+
+```bash
+./src/waf-tests/paranoia-sweep.sh        # detección vs FP por paranoia level → paranoia-fp.png
+./src/waf-tests/pl-detection-gap.sh      # 11 ataques que PL1 deja pasar y PL2 bloquea
+./src/waf-tests/anomaly-scores.sh        # score real por request → anomaly-scores.png + anomaly-threshold.png
+python3 src/waf-tests/plot-paranoia.py
+python3 src/waf-tests/plot-anomaly.py
+```
+
+Los gráficos quedan en `docs/images/`. El análisis completo (por qué PL2, por qué threshold 5, por qué la exclusión) está en [`modsecurity.md` → Fase 4](./modsecurity.md#fase-4--paranoia-level-anomaly-scoring-y-rule-exclusions-pre-entrega-34).
 
 ---
 
