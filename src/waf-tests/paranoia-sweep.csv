@@ -1,0 +1,5 @@
+pl,attacks_total,attacks_blocked,benign_total,benign_blocked_fp
+1,6,6,10,0
+2,6,6,10,1
+3,6,6,10,2
+4,6,6,10,9
