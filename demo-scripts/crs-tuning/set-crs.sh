@@ -94,7 +94,7 @@ cat >> "$tmp" <<'YAML'
         "id:1004,phase:1,deny,status:403,log,tag:info_endpoint,msg:topology_endpoint_blocked"
 
     SecRule REQUEST_HEADERS:User-Agent "@rx (?i:(sqlmap|nikto|nmap|wpscan))" \
-        "id:4001,phase:1,deny,status:403,log,tag:scanner,msg:malicious_scanner_detected"
+        "id:4001,phase:1,pass,log,auditlog,t:none,tag:scanner,msg:malicious_scanner_detected,ctl:ruleEngine=DetectionOnly"
 YAML
 
 sed -i.bak "s/__PL__/$PL/; s/__THR__/${THRESHOLD:-5}/" "$tmp" && rm -f "$tmp.bak"

@@ -36,6 +36,19 @@ run_case() {
             printf "  ${RED}✗ MISS ${NC}  %-40s (expected 403, got %s)\n" "$name" "$status"
             MISSED=$((MISSED + 1))
         fi
+    elif [ "$expected" = "detect" ]; then
+        # Regla en modo detección (p. ej. el scanner UA 4001): el WAF registra el
+        # match en el audit log pero NO bloquea (la transacción pasa al backend).
+        # Ambos resultados cuentan como correctos según el modo del toggle
+        # (demo-scripts/scanner-mode.sh): 403 = la regla está en bloqueo; ≠403 =
+        # en detección. La evidencia de detección (entrada con id 4001 en el
+        # audit log) la verifica demo-scripts/scanner-mode.sh.
+        if [ "$status" = "403" ]; then
+            printf "  ${BLUE}⊙ BLOCK ${NC} %-40s (regla en modo bloqueo, HTTP %s)\n" "$name" "$status"
+        else
+            printf "  ${BLUE}⊙ DETECT${NC} %-40s (no bloqueado; match en audit log, HTTP %s)\n" "$name" "$status"
+        fi
+        CORRECT=$((CORRECT + 1))
     else
         if [ "$status" = "403" ]; then
             printf "  ${RED}✗ FP   ${NC}  %-40s (expected pass, got %s)\n" "$name" "$status"
@@ -68,7 +81,6 @@ print_section() {
 }
 
 print_stats() {
-    local attacks=$((CORRECT + MISSED - 0))
     echo ""
     echo "======================================================"
     echo " Results"

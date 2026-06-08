@@ -67,7 +67,7 @@ echo "  -> funciona, pero es global: cualquier ataque que sume < 20 se filtrarí
 pause
 
 echo ""
-echo "Restaurando el ConfigMap committeado (el default: PL2 + exclusión 932200)..."
+echo "Restaurando el ConfigMap committeado (PL2 + exclusiones 932200/932236 + scanner en detección)..."
 kubectl patch configmap ingress-nginx-controller -n ingress-nginx \
   --type merge --patch-file "$ROOT/dist/modsecurity-configmap.yaml" >/dev/null
 echo "Listo."

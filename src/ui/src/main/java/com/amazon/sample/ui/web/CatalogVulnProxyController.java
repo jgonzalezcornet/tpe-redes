@@ -43,7 +43,10 @@ public class CatalogVulnProxyController {
       .build();
   }
 
-  @GetMapping("/search")
+  // Sin el marcador `view`: API/curl/tests/ataques obtienen el JSON crudo (la
+  // superficie vulnerable que ejercita el WAF). El form del navegador manda
+  // `view=html` y lo atiende CatalogSearchController, que renderiza la página.
+  @GetMapping(value = "/search", params = "!view")
   public Mono<ResponseEntity<String>> search(@RequestParam(required = false) String q) {
     String catalogBase = endpoints.getCatalog();
     if (!StringUtils.hasText(catalogBase)) {

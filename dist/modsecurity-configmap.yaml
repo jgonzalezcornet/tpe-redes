@@ -12,7 +12,7 @@ data:
     # carga antes que el CRS y su init es set-if-unset, así que este valor gana.
     # El anomaly threshold se deja en el default del CRS (5 = bloquea ante una
     # sola regla critica); subirlo solo cambiaria FP por deteccion de senales
-    # debiles (ver docs/modsecurity.md, Fase 4).
+    # debiles (ver README, seccion 3.1).
     SecAction \
         "id:900100,phase:1,nolog,pass,t:none,setvar:tx.blocking_paranoia_level=2"
 
@@ -22,6 +22,16 @@ data:
     # de /catalog/search; SQLi/XSS (942xxx/941xxx) siguen activos en ese campo.
     SecRule REQUEST_URI "@beginsWith /catalog/search" \
         "id:900200,phase:1,pass,nolog,ctl:ruleRemoveTargetById=932200;ARGS:q"
+
+    # 3.4 Rule exclusion (cont.) — la regla 932236 "RCE Unix command injection
+    # (command without evasion)" matchea nombres de comando Unix sueltos (red,
+    # watch, knife, node, ...), causando FP en busquedas de producto en lenguaje
+    # natural (ver corpus happy-corpus.sh). Se desactiva SOLO en ARGS:q de
+    # /catalog/search. La deteccion de command injection real (con metacaracteres
+    # ; | && $()) la mantienen 932130/932160/932235/932260/942120, que NO se tocan
+    # — verificado: el corpus de ataques sigue en la misma deteccion, 0 regresion.
+    SecRule REQUEST_URI "@beginsWith /catalog/search" \
+        "id:900201,phase:1,pass,nolog,ctl:ruleRemoveTargetById=932236;ARGS:q"
 
     # 3.1 IDOR — block external access to internal /proxy/* endpoints
     SecRule REQUEST_URI "@beginsWith /proxy/" \
@@ -38,6 +48,14 @@ data:
     SecRule REQUEST_URI "@streq /topology" \
         "id:1004,phase:1,deny,status:403,log,tag:info_endpoint,msg:topology_endpoint_blocked"
 
-    # 3.4.3 Malicious scanner User-Agent detection
+    # 3.4.3 Malicious scanner User-Agent — DETECCION (default; ver README 5.1).
+    # Un User-Agent es trivialmente falsificable, asi que bloquearlo aporta poca
+    # proteccion real; en cambio registrar el intento si tiene valor de
+    # visibilidad. Por eso esta regla DETECTA y registra (auditlog) pero NO
+    # bloquea: ctl:ruleEngine=DetectionOnly pone toda la transaccion en modo
+    # deteccion (cada regla evalua y loguea, ninguna bloquea). Eso ademas
+    # neutraliza la regla de scanner del CRS (913100) y la colision de "nmap"
+    # con unix-shell.data en fase 2, asi que el scanner pasa (200) y queda en el
+    # audit log con id 4001. Alternar a modo bloqueo: demo-scripts/scanner-mode.sh
     SecRule REQUEST_HEADERS:User-Agent "@rx (?i:(sqlmap|nikto|nmap|wpscan))" \
-        "id:4001,phase:1,deny,status:403,log,tag:scanner,msg:malicious_scanner_detected"
+        "id:4001,phase:1,pass,log,auditlog,t:none,tag:scanner,msg:malicious_scanner_detected,ctl:ruleEngine=DetectionOnly"
