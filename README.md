@@ -44,8 +44,6 @@ flowchart LR
 | [Orders](./src/orders/) | Java (Spring Boot) | Procesamiento de órdenes |
 | [Checkout](./src/checkout/) | Node.js (NestJS) | Checkout y pago |
 
-![Topología de microservicios](/docs/images/architecture.png)
-
 ---
 
 ## 1. Prerrequisitos
@@ -103,8 +101,8 @@ Los valores del Core Rule Set se determinaron mediante un análisis de detecció
 | Parámetro | Valor | Justificación |
 |-----------|-------|---------------|
 | Paranoia level | **2** | Bloquea 11 ataques ofuscados que el nivel 1 no detecta (operadores SQL como `1 OR 1` o `@@version`, cadenas codificadas en hexadecimal, ejecución remota mediante backticks) sin introducir falsos positivos sobre lenguaje natural. Es el nivel recomendado por la documentación del CRS para una tienda online estándar. Los niveles 3 y 4 incrementan los falsos positivos sin aportar detección adicional medible. |
-| Anomaly threshold | **5** (valor por defecto del CRS) | El CRS acumula un puntaje de anomalía por request —cada regla que coincide suma según su severidad— y bloquea cuando el puntaje alcanza el umbral. Con el valor 5 basta una única regla crítica para bloquear, la postura más estricta. Elevarlo solo intercambia detección de señales débiles por una reducción marginal de falsos positivos. |
-| Exclusiones `932200` y `932236` sobre `ARGS:q` | — | En paranoia level 2 el buscador genera falsos positivos: los símbolos aritméticos activan la regla `932200` ("RCE Bypass Technique") y los nombres de comando Unix aislados (p. ej. `red`, `watch`, `knife`) activan la `932236` ("RCE Unix Command Injection"). Las exclusiones desactivan únicamente esas dos reglas, y solo sobre ese parámetro; la detección de SQLi y XSS (reglas `942xxx`/`941xxx`) y de command injection real (otras reglas `93xxxx`) permanece activa. |
+| Anomaly threshold | **5** (valor por defecto del CRS) | El CRS acumula un puntaje de anomalía por request y bloquea cuando el puntaje alcanza el umbral. Con el valor 5 basta una única regla crítica para bloquear, la postura más estricta. Elevarlo solo intercambia detección de señales débiles por una reducción marginal de falsos positivos. |
+| Exclusiones `932200` y `932236` sobre `ARGS:q` | - | En paranoia level 2 el buscador genera falsos positivos: los símbolos aritméticos activan la regla `932200` ("RCE Bypass Technique") y los nombres de comando Unix aislados (p. ej. `red`, `watch`, `knife`) activan la `932236` ("RCE Unix Command Injection"). Las exclusiones desactivan únicamente esas dos reglas, y solo sobre ese parámetro; la detección de SQLi y XSS (reglas `942xxx`/`941xxx`) y de command injection real (otras reglas `93xxxx`) permanece activa. |
 
 El threshold se mantiene en 5 y los falsos positivos se corrigen con exclusiones acotadas en lugar de elevar el umbral, de modo que el ajuste no debilita la detección de forma global.
 
@@ -132,9 +130,9 @@ El controller recarga nginx al detectar el cambio en el ConfigMap, lo que demora
 
 ### 4.2 Tests contra el WAF
 
-#### Opción A — scripts automatizados (recomendado)
+#### Opción A: scripts automatizados (recomendado)
 
-Con el cluster en ejecución, los scripts en `src/waf-tests/` ejercitan distintos casos de peticiones al servidor y reportan un resumen (`✓`/`✗`) comparando el código de estado HTTP. Para un ataque, el éxito corresponde a `403`; para tráfico legítimo, a cualquier código distinto de `403`.
+Con el cluster en ejecución, los scripts en `src/waf-tests/` ejercitan distintos casos de peticiones al servidor y reportan un resumen (`✓`/`✗`) comparando el código de estado HTTP. Para un ataque, el éxito corresponde a `403` y para tráfico legítimo cualquier código distinto de `403`.
 
 ```bash
 # Casos del pre-entrega:
@@ -149,7 +147,7 @@ Con el cluster en ejecución, los scripts en `src/waf-tests/` ejercitan distinto
 
 Los scripts apuntan a `http://localhost` por defecto; el destino puede sobrescribirse mediante la variable `WAF_TEST_URL`.
 
-#### Opción B — ejecuciones manuales
+#### Opción B: ejecuciones manuales
 
 Alternativamente, cada caso puede ejecutarse de forma individual con `curl`, lo que permite observar el comportamiento del WAF sobre una petición concreta. Los comandos de cada categoría se detallan en la sección 5; combinándolos con el encendido y apagado del WAF (sección 4.1) se contrasta el resultado **sin WAF** (la petición alcanza el backend y la vulnerabilidad se manifiesta) contra **con WAF** (la petición se bloquea con `403` en el borde).
 
@@ -170,12 +168,12 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost/info   # 200 sin WAF, 
 
 | Categoría | Endpoints | Regla | Qué evita |
 |-----------|-----------|:-----:|-----------|
-| IDOR — proxy interno | `/proxy/*` (ej. `/proxy/carts/{id}`, `/proxy/orders/{id}`) | `1001` | Acceso externo a endpoints internos → datos de otros clientes |
+| IDOR/proxy interno | `/proxy/*` (ej. `/proxy/carts/{id}`, `/proxy/orders/{id}`) | `1001` | Acceso externo a endpoints internos → datos de otros clientes |
 | Endpoints administrativos | `/utility/*` (salvo origen `127.0.0.1`) | `2002` | DoS, consumo intensivo de CPU, operaciones arbitrarias, fuga de información |
 | Exposición de info | `/info`, `/topology` | `1003`, `1004` | Exposición de configuración y topología interna |
 | Scanners automáticos | cualquier ruta con `User-Agent` de `sqlmap`, `nikto`, `nmap` o `wpscan` | `4001` | Registra el reconocimiento (modo **detección**, ver más abajo) |
 
-> **Regla 2002 — fuente de la IP.** La pre-entrega plantea filtrar por el header `X-Forwarded-For`. La implementación usa `REMOTE_ADDR` (la IP de la conexión TCP que ve nginx): `X-Forwarded-For` lo controla el cliente y queda *undefined* cuando no lo envía, en cuyo caso la regla *chained* no dispararía y `/utility/*` quedaría expuesto. `REMOTE_ADDR` siempre existe y no es spoofeable a nivel HTTP, por lo que cumple el objetivo (restringir los endpoints administrativos a IPs autorizadas) de forma más robusta. En producción detrás de un balanceador se volvería a `X-Forwarded-For` con `trusted-proxies` configurado.
+> **Regla 2002: fuente de la IP.** La pre-entrega plantea filtrar por el header `X-Forwarded-For`. La implementación usa `REMOTE_ADDR` (la IP de la conexión TCP que ve nginx): `X-Forwarded-For` lo controla el cliente y queda *undefined* cuando no lo envía, en cuyo caso la regla *chained* no dispararía y `/utility/*` quedaría expuesto. `REMOTE_ADDR` siempre existe y no es spoofeable a nivel HTTP, por lo que cumple el objetivo (restringir los endpoints administrativos a IPs autorizadas) de forma más robusta. En producción detrás de un balanceador se volvería a `X-Forwarded-For` con `trusted-proxies` configurado.
 
 Comandos de prueba (resultado **sin WAF** → **con WAF**):
 
@@ -189,7 +187,7 @@ curl -X POST -H "Content-Type: application/json" \
 curl -A "sqlmap/1.7" "http://localhost/catalog/search?q=test"  # 200        -> 200 (detectado y logueado, no bloqueado)
 ```
 
-**Modo detección de la regla de scanner (`4001`).** A diferencia de las otras cuatro reglas custom, `4001` no bloquea: corre en **modo detección** por defecto. Un `User-Agent` es trivialmente falsificable —un atacante real lo cambia y evade el bloqueo—, de modo que bloquearlo aporta poca protección; en cambio, registrar el intento de reconocimiento sí tiene valor de visibilidad. Por eso la regla **registra el match en el audit log pero deja pasar el request** (`200`).
+**Modo detección de la regla de scanner (`4001`).** A diferencia de las otras cuatro reglas custom, `4001` no bloquea: corre en **modo detección** por defecto. Un `User-Agent` es trivialmente falsificable ya que un atacante real lo cambia y evade el bloqueo. En cambio, registrar el intento de reconocimiento sí tiene valor de visibilidad. Por eso la regla **registra el match en el audit log pero deja pasar el request** (`200`).
 
 Al coincidir el `User-Agent`, la regla aplica `ctl:ruleEngine=DetectionOnly`, que pone toda la transacción en modo detección (cada regla evalúa y registra, ninguna bloquea). Esto además neutraliza la regla de scanner del propio CRS (`913100`, que de otro modo bloquearía estos `User-Agent` por su cuenta) y la colisión del término `nmap` con la lista de comandos Unix del CRS.
 
@@ -208,8 +206,8 @@ En los scripts de prueba, los casos de scanner se evalúan con el criterio `dete
 
 El CRS inspecciona la totalidad del tráfico; las vulnerabilidades reales de la aplicación se concentran en dos endpoints del catálogo:
 
-- `GET /catalog/search?q=` — búsqueda con SQL concatenado; refleja `q` en la respuesta JSON.
-- `GET /catalog/image?file=` — `ReadFile` sin validar `..` en la ruta.
+- `GET /catalog/search?q=`: búsqueda con SQL concatenado; refleja `q` en la respuesta JSON.
+- `GET /catalog/image?file=`: `ReadFile` sin validar `..` en la ruta.
 
 > **Barra de búsqueda: HTML para el usuario, JSON para la API.** El mismo endpoint `/catalog/search` atiende a dos clientes sobre la misma URI: el formulario del navegador agrega el marcador `view=html` y recibe la página de resultados renderizada (menú de categorías y grilla de productos), mientras que `curl`, los scripts de `waf-tests` y los ataques llegan sin `view` y obtienen el JSON crudo descripto arriba. Al compartir la URI, la búsqueda del usuario queda bajo la misma cobertura del WAF y el mismo ajuste de falsos positivos sobre `ARGS:q` (sección 3.1): un ataque por la barra se bloquea en el borde igual que por la API, y la aplicación permanece deliberadamente vulnerable para que esa protección sea demostrable.
 
@@ -262,13 +260,13 @@ Cada entrada incluye el `[id "..."]` y el `[msg "..."]` de la regla (p. ej.
 
 Esto es especialmente relevante para las reglas en **modo detección** (como la de scanner, sección 5.1): al no bloquear, el audit log es la **única** señal de que se detectó el patrón. Un scanner detectado aparece con `id "4001"` y `msg "malicious_scanner_detected"` aunque el request haya devuelto `200`.
 
-> **Persistencia (alcance del PoC).** Tanto el audit log (archivos en el filesystem efímero del Pod del controller) como el stream de `kubectl logs` (que el kubelet retiene solo para el contenedor actual) se pierden si el Pod se reinicia o se recrea el cluster. Para este PoC es suficiente: el objetivo es **generar** logs estructurados y auditables (IP de origen, endpoint, payload, regla), no retenerlos. El paso a producción es directo porque las denegaciones ya salen por **stdout/stderr** —el stream nativo que recolecta cualquier pipeline de logs de Kubernetes—: alcanza con agregar un colector (p. ej. Fluent Bit como DaemonSet) que envíe esos eventos a un store central (Loki / Elasticsearch / SIEM), opcionalmente con `SecAuditLogFormat JSON` para parseo directo.
+> **Persistencia (alcance del PoC).** Tanto el audit log (archivos en el filesystem efímero del Pod del controller) como el stream de `kubectl logs` (que el kubelet retiene solo para el contenedor actual) se pierden si el Pod se reinicia o se recrea el cluster. Para este PoC es suficiente: el objetivo es **generar** logs estructurados y auditables (IP de origen, endpoint, payload, regla), no retenerlos. El paso a producción es directo porque las denegaciones ya salen por **stdout/stderr**. alcanza con agregar un colector (p. ej. Fluent Bit como DaemonSet) que envíe esos eventos a un store central (Loki / Elasticsearch / SIEM), opcionalmente con `SecAuditLogFormat JSON` para parseo directo.
 
 ## 7. Ajuste del CRS y demostraciones complementarias (opcional)
 
 ### 7.1 Demo del ajuste del CRS
 
-`demo-scripts/crs-tuning/demo-flip.sh` recorre —con pausas para narrar— cómo una búsqueda legítima con símbolos (`q=1+2-3*4/5=6`, p. ej. un código de producto) cambia de comportamiento según el ajuste del CRS:
+`demo-scripts/crs-tuning/demo-flip.sh` recorre cómo una búsqueda legítima con símbolos (`q=1+2-3*4/5=6`, p. ej. un código de producto) cambia de comportamiento según el ajuste del CRS:
 
 ```bash
 ./demo-scripts/crs-tuning/demo-flip.sh   # PL1 pasa -> PL2 falso positivo -> corrección
