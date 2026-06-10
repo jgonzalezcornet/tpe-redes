@@ -201,7 +201,7 @@ El modo es reversible y se aplica sin downtime (recarga in-process del ingress):
 ./waf-tests/demo/scanner-mode.sh detect   # vuelve a detección (default; imprime la evidencia del audit log)
 ```
 
-En los scripts de prueba, los casos de scanner se evalúan con el criterio `detect`: el éxito es que el WAF **no** bloquee (y registre el match), no el `403`. El gate `run.sh --attacks` da `18/18` en cualquiera de los dos modos.
+En los scripts de prueba, los casos de scanner se evalúan con el criterio `detect`: el éxito es que el WAF **no** bloquee (y registre el match), no el `403`. El gate `run.sh --attacks` da `19/19` en cualquiera de los dos modos.
 
 > **Nota sobre la pre-entrega.** La pre-entrega definía la regla `4001` con `deny,status:403` (bloqueo). El modo detección es un refinamiento posterior por el razonamiento de arriba (el `User-Agent` es falsificable). El comportamiento de bloqueo comprometido en la pre-entrega sigue disponible y a un solo comando: `./waf-tests/demo/scanner-mode.sh block`.
 
@@ -211,7 +211,7 @@ El CRS inspecciona la totalidad del tráfico. Conviene distinguir dos situacione
 
 **Vulnerabilidades reales** (con el WAF apagado se observa el daño), concentradas en dos endpoints del catálogo:
 
-- `GET /catalog/search?q=`: búsqueda con SQL concatenado (SQLi). Refleja `q` en la respuesta JSON y, en la vista HTML del navegador, sin escapar (XSS reflejado que ejecuta en el cliente).
+- `GET /catalog/search?q=`: búsqueda con SQL concatenado (SQLi). Refleja `q` en la respuesta JSON y, en la vista HTML del navegador, sin escapar (XSS reflejado que ejecuta en el cliente). En el cluster desplegado el catálogo usa **SQLite en memoria** (`RETAIL_CATALOG_PERSISTENCE_PROVIDER=in-memory`), no MySQL.
 - `GET /catalog/image?file=`: `ReadFile` sin validar `..` en la ruta (path traversal / LFI).
 
 **Cobertura de patrón del CRS (defensa en profundidad)**: command injection, SSTI, LDAP, NoSQL, XXE, shellshock y log4shell. El CRS detecta y bloquea estos patrones, pero la aplicación **no** expone un sink explotable para ellos (no ejecuta comandos de shell, no evalúa plantillas, no consulta LDAP/NoSQL ni parsea XML con entrada del usuario). Con el WAF apagado estos payloads no producen ningún efecto; el valor es que el WAF los corta de todos modos.
@@ -229,9 +229,11 @@ El CRS inspecciona la totalidad del tráfico. Conviene distinguir dos situacione
 Comandos de prueba:
 
 ```bash
-# SQL injection (sin WAF devuelve el catálogo completo o un error 500)
+# SQL injection (sin WAF: catálogo completo, exfiltración de esquema o error 500)
 curl --get --data-urlencode "q=' OR 1=1--" http://localhost/catalog/search
 curl --get --data-urlencode "q=' UNION SELECT password FROM users--" http://localhost/catalog/search
+# Exfiltra tablas y DDL vía sqlite_master (válido en el SQLite in-memory del cluster)
+curl --get --data-urlencode "q=' AND 1=0 UNION SELECT name,sql,type,0 FROM sqlite_master WHERE type='table'--" http://localhost/catalog/search
 
 # XSS reflejado (sin WAF): por la API/curl el payload vuelve en el campo "query"
 # del JSON; por la barra de búsqueda del navegador (view=html) se refleja sin

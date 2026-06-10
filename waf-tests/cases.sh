@@ -23,6 +23,7 @@ attack_cases() {
     print_section "3.4.1 SQL Injection"
     run_case "SQLi tautology"           block --get --data-urlencode "q=' OR 1=1--" "$BASE/catalog/search"
     run_case "SQLi union select"        block --get --data-urlencode "q=' UNION SELECT password FROM users--" "$BASE/catalog/search"
+    run_case "SQLi sqlite_master schema" block --get --data-urlencode "q=' AND 1=0 UNION SELECT name,sql,type,0 FROM sqlite_master WHERE type='table'--" "$BASE/catalog/search"
 
     print_section "3.4.1 XSS"
     run_case "XSS img onerror"          block --get --data-urlencode "q=<img src=x onerror=alert(1)>" "$BASE/catalog/search"
