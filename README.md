@@ -302,16 +302,7 @@ python3 src/waf-tests/plot-anomaly.py    # anomaly-scores.csv  -> docs/images/an
 
 > El paranoia level y el threshold se fijan desde el ConfigMap con un `SecAction setvar:tx.blocking_paranoia_level=N`, que se carga antes del CRS (cuyo init es *set-if-unset*, así que ese valor gana). Parchear el ConfigMap recarga nginx **in-process** (~6 s) sin downtime; **no** usar `kubectl rollout restart` sobre el controller (réplica única con hostPort 80 en Kind → cortaría el tráfico).
 
-### 7.2 Alternar la regla de scanner (detección / bloqueo)
-
-Ver la sección 5.1 para el detalle del modo detección:
-
-```bash
-./demo-scripts/scanner-mode.sh block     # 4001 bloquea (403)
-./demo-scripts/scanner-mode.sh detect    # 4001 detecta y registra, sin bloquear (default)
-```
-
-### 7.3 Demostraciones de impacto
+### 7.2 Demostraciones de impacto
 
 Cada script restaura la configuración por defecto del WAF al finalizar:
 
