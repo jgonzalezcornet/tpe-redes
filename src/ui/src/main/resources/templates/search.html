@@ -51,6 +51,16 @@
             </button>
           </form>
 
+          <!-- Reflexión de la query SIN escapar (th:utext), a propósito: la app
+               no se defiende del XSS — el WAF es la única capa que lo corta (CRS
+               941xxx -> 403). Sin WAF, q=<img src=x onerror=alert(1)> ejecuta en
+               el navegador. Ver README §5 (XSS reflejado). -->
+          <p
+            th:if="${!#strings.isEmpty(query)}"
+            class="text-sm text-gray-500 mb-4"
+            th:utext="|Showing results for: ${query}|"
+          ></p>
+
           <div
             th:if="${#lists.isEmpty(products)}"
             class="text-center text-gray-500 py-12"

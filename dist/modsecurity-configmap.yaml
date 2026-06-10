@@ -26,7 +26,7 @@ data:
     # 3.4 Rule exclusion (cont.) — la regla 932236 "RCE Unix command injection
     # (command without evasion)" matchea nombres de comando Unix sueltos (red,
     # watch, knife, node, ...), causando FP en busquedas de producto en lenguaje
-    # natural (ver corpus happy-corpus.sh). Se desactiva SOLO en ARGS:q de
+    # natural (ver el corpus legitimo en corpus.sh; run.sh --happy --corpus). Se desactiva SOLO en ARGS:q de
     # /catalog/search. La deteccion de command injection real (con metacaracteres
     # ; | && $()) la mantienen 932130/932160/932235/932260/942120, que NO se tocan
     # — verificado: el corpus de ataques sigue en la misma deteccion, 0 regresion.
@@ -56,6 +56,6 @@ data:
     # deteccion (cada regla evalua y loguea, ninguna bloquea). Eso ademas
     # neutraliza la regla de scanner del CRS (913100) y la colision de "nmap"
     # con unix-shell.data en fase 2, asi que el scanner pasa (200) y queda en el
-    # audit log con id 4001. Alternar a modo bloqueo: demo-scripts/scanner-mode.sh
+    # audit log con id 4001. Alternar a modo bloqueo: waf-tests/demo/scanner-mode.sh
     SecRule REQUEST_HEADERS:User-Agent "@rx (?i:(sqlmap|nikto|nmap|wpscan))" \
         "id:4001,phase:1,pass,log,auditlog,t:none,tag:scanner,msg:malicious_scanner_detected,ctl:ruleEngine=DetectionOnly"

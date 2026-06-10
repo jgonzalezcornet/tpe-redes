@@ -40,9 +40,9 @@ run_case() {
         # Regla en modo detección (p. ej. el scanner UA 4001): el WAF registra el
         # match en el audit log pero NO bloquea (la transacción pasa al backend).
         # Ambos resultados cuentan como correctos según el modo del toggle
-        # (demo-scripts/scanner-mode.sh): 403 = la regla está en bloqueo; ≠403 =
+        # (waf-tests/demo/scanner-mode.sh): 403 = la regla está en bloqueo; ≠403 =
         # en detección. La evidencia de detección (entrada con id 4001 en el
-        # audit log) la verifica demo-scripts/scanner-mode.sh.
+        # audit log) la verifica waf-tests/demo/scanner-mode.sh.
         if [ "$status" = "403" ]; then
             printf "  ${BLUE}⊙ BLOCK ${NC} %-40s (regla en modo bloqueo, HTTP %s)\n" "$name" "$status"
         else

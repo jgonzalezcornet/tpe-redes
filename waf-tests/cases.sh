@@ -33,7 +33,7 @@ attack_cases() {
 
     # 4001 corre en modo DETECCIÓN por defecto: el scanner pasa (200) y queda
     # registrado en el audit log, no se bloquea. Ver README §5.1 y
-    # demo-scripts/scanner-mode.sh (toggle detect/block).
+    # waf-tests/demo/scanner-mode.sh (toggle detect/block).
     print_section "3.4.3 Scanner User-Agent (modo detección)"
     run_case "Scanner sqlmap UA"        detect -A "sqlmap/1.7" "$BASE/catalog/search?q=test"
     run_case "Scanner nikto UA"         detect -A "Nikto/2.5"  "$BASE/catalog/search?q=test"

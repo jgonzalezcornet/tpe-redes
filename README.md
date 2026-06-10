@@ -117,13 +117,13 @@ Para comparar el comportamiento con y sin protección es necesario alternar el e
 **Desactivar** (los ataques alcanzan el backend y la vulnerabilidad se manifiesta):
 
 ```bash
-./demo-scripts/turn-waf-off.sh
+./waf-tests/demo/turn-waf-off.sh
 ```
 
 **Activar** (reaplica `SecRuleEngine On` junto con todas las reglas custom):
 
 ```bash
-./demo-scripts/turn-waf-on.sh
+./waf-tests/demo/turn-waf-on.sh
 ```
 
 El controller recarga nginx al detectar el cambio en el ConfigMap, lo que demora unos segundos. El estado puede verificarse, por ejemplo, con `curl http://localhost/info` (`200` sin WAF, `403` con WAF).
@@ -132,17 +132,20 @@ El controller recarga nginx al detectar el cambio en el ConfigMap, lo que demora
 
 #### Opción A: scripts automatizados (recomendado)
 
-Con el cluster en ejecución, los scripts en `src/waf-tests/` ejercitan distintos casos de peticiones al servidor y reportan un resumen (`✓`/`✗`) comparando el código de estado HTTP. Para un ataque, el éxito corresponde a `403` y para tráfico legítimo cualquier código distinto de `403`.
+Con el cluster en ejecución, los scripts en `waf-tests/` ejercitan distintos casos de peticiones al servidor y reportan un resumen (`✓`/`✗`) comparando el código de estado HTTP. Para un ataque, el éxito corresponde a `403` y para tráfico legítimo cualquier código distinto de `403`.
+
+Un único runner (`run.sh`) los agrupa con flags. Sin flags corre el gate del pre-entrega (ataques + legítimo); los flags de tráfico (`--attacks`/`--happy`) y de conjunto (`--corpus`/`--full`) se combinan.
 
 ```bash
-# Casos del pre-entrega:
-./src/waf-tests/attacks.sh       # ataques  -> 403
-./src/waf-tests/happy-path.sh    # legítimo -> 200
-./src/waf-tests/mixed.sh         # ambos
+# Casos curados del pre-entrega (gate determinista):
+./waf-tests/run.sh                # ambos (ataques -> 403, legítimo -> 200)
+./waf-tests/run.sh --attacks      # solo ataques
+./waf-tests/run.sh --happy        # solo tráfico legítimo
 
-# Corpus amplio:
-./src/waf-tests/attacks-corpus.sh   # ataques
-./src/waf-tests/happy-corpus.sh     # legítimos
+# Corpus amplio (100+) para medir tasas; --full corre casos curados + corpus:
+./waf-tests/run.sh --attacks --corpus   # tasa de detección
+./waf-tests/run.sh --happy --corpus     # tasa de falsos positivos
+./waf-tests/run.sh --full               # todo
 ```
 
 Los scripts apuntan a `http://localhost` por defecto; el destino puede sobrescribirse mediante la variable `WAF_TEST_URL`.
@@ -194,30 +197,34 @@ Al coincidir el `User-Agent`, la regla aplica `ctl:ruleEngine=DetectionOnly`, qu
 El modo es reversible y se aplica sin downtime (recarga in-process del ingress):
 
 ```bash
-./demo-scripts/scanner-mode.sh block    # 4001 pasa a bloquear (403)
-./demo-scripts/scanner-mode.sh detect   # vuelve a detección (default; imprime la evidencia del audit log)
+./waf-tests/demo/scanner-mode.sh block    # 4001 pasa a bloquear (403)
+./waf-tests/demo/scanner-mode.sh detect   # vuelve a detección (default; imprime la evidencia del audit log)
 ```
 
-En los scripts de prueba, los casos de scanner se evalúan con el criterio `detect`: el éxito es que el WAF **no** bloquee (y registre el match), no el `403`. El gate `attacks.sh` da `18/18` en cualquiera de los dos modos.
+En los scripts de prueba, los casos de scanner se evalúan con el criterio `detect`: el éxito es que el WAF **no** bloquee (y registre el match), no el `403`. El gate `run.sh --attacks` da `18/18` en cualquiera de los dos modos.
 
-> **Nota sobre la pre-entrega.** La pre-entrega definía la regla `4001` con `deny,status:403` (bloqueo). El modo detección es un refinamiento posterior por el razonamiento de arriba (el `User-Agent` es falsificable). El comportamiento de bloqueo comprometido en la pre-entrega sigue disponible y a un solo comando: `./demo-scripts/scanner-mode.sh block`.
+> **Nota sobre la pre-entrega.** La pre-entrega definía la regla `4001` con `deny,status:403` (bloqueo). El modo detección es un refinamiento posterior por el razonamiento de arriba (el `User-Agent` es falsificable). El comportamiento de bloqueo comprometido en la pre-entrega sigue disponible y a un solo comando: `./waf-tests/demo/scanner-mode.sh block`.
 
 ### 5.2 Inyección genérica (OWASP CRS)
 
-El CRS inspecciona la totalidad del tráfico; las vulnerabilidades reales de la aplicación se concentran en dos endpoints del catálogo:
+El CRS inspecciona la totalidad del tráfico. Conviene distinguir dos situaciones según si la aplicación es realmente explotable o si el CRS solo aporta cobertura de patrón:
 
-- `GET /catalog/search?q=`: búsqueda con SQL concatenado; refleja `q` en la respuesta JSON.
-- `GET /catalog/image?file=`: `ReadFile` sin validar `..` en la ruta.
+**Vulnerabilidades reales** (con el WAF apagado se observa el daño), concentradas en dos endpoints del catálogo:
+
+- `GET /catalog/search?q=`: búsqueda con SQL concatenado (SQLi). Refleja `q` en la respuesta JSON y, en la vista HTML del navegador, sin escapar (XSS reflejado que ejecuta en el cliente).
+- `GET /catalog/image?file=`: `ReadFile` sin validar `..` en la ruta (path traversal / LFI).
+
+**Cobertura de patrón del CRS (defensa en profundidad)**: command injection, SSTI, LDAP, NoSQL, XXE, shellshock y log4shell. El CRS detecta y bloquea estos patrones, pero la aplicación **no** expone un sink explotable para ellos (no ejecuta comandos de shell, no evalúa plantillas, no consulta LDAP/NoSQL ni parsea XML con entrada del usuario). Con el WAF apagado estos payloads no producen ningún efecto; el valor es que el WAF los corta de todos modos.
 
 > **Barra de búsqueda: HTML para el usuario, JSON para la API.** El mismo endpoint `/catalog/search` atiende a dos clientes sobre la misma URI: el formulario del navegador agrega el marcador `view=html` y recibe la página de resultados renderizada (menú de categorías y grilla de productos), mientras que `curl`, los scripts de `waf-tests` y los ataques llegan sin `view` y obtienen el JSON crudo descripto arriba. Al compartir la URI, la búsqueda del usuario queda bajo la misma cobertura del WAF y el mismo ajuste de falsos positivos sobre `ARGS:q` (sección 3.1): un ataque por la barra se bloquea en el borde igual que por la API, y la aplicación permanece deliberadamente vulnerable para que esa protección sea demostrable.
 
-| Familia de ataque | Reglas CRS | Endpoint de prueba |
-|-------------------|:----------:|--------------------|
-| SQL injection | `942xxx` | `/catalog/search?q=` |
-| XSS | `941xxx` | `/catalog/search?q=` |
-| Path traversal / LFI | `930xxx`, `931xxx` | `/catalog/image?file=` |
-| Command injection | `932xxx` | `/catalog/search?q=` |
-| Otros (SSTI, LDAP, NoSQL, XXE, shellshock, log4shell) | varias | `/catalog/search?q=` |
+| Familia de ataque | Reglas CRS | Endpoint de prueba | Explotable en la app |
+|-------------------|:----------:|--------------------|:--------------------:|
+| SQL injection | `942xxx` | `/catalog/search?q=` | Sí |
+| XSS reflejado | `941xxx` | `/catalog/search?q=` (vista HTML) | Sí |
+| Path traversal / LFI | `930xxx`, `931xxx` | `/catalog/image?file=` | Sí |
+| Command injection | `932xxx` | `/catalog/search?q=` | No — cobertura CRS |
+| Otros (SSTI, LDAP, NoSQL, XXE, shellshock, log4shell) | varias | `/catalog/search?q=` | No — cobertura CRS |
 
 Comandos de prueba:
 
@@ -226,7 +233,9 @@ Comandos de prueba:
 curl --get --data-urlencode "q=' OR 1=1--" http://localhost/catalog/search
 curl --get --data-urlencode "q=' UNION SELECT password FROM users--" http://localhost/catalog/search
 
-# XSS (sin WAF refleja el payload en el campo "query")
+# XSS reflejado (sin WAF): por la API/curl el payload vuelve en el campo "query"
+# del JSON; por la barra de búsqueda del navegador (view=html) se refleja sin
+# escapar y ejecuta en el cliente (p. ej. alert(1)). Con WAF, 403 en ambos casos.
 curl --get --data-urlencode "q=<img src=x onerror=alert(1)>" http://localhost/catalog/search
 
 # Path traversal (sin WAF devuelve el contenido del archivo)
@@ -234,7 +243,7 @@ curl "http://localhost/catalog/image?file=../../../../etc/passwd"
 curl "http://localhost/catalog/image?file=../../../../proc/self/environ"
 ```
 
-El listado completo de payloads que cubre el corpus (30 SQLi, 25 XSS, 20 traversal, 12 command injection, 13 protocolos varios, 12 scanners) se encuentra en [`src/waf-tests/corpus.sh`](./src/waf-tests/corpus.sh).
+El listado completo de payloads que cubre el corpus (30 SQLi, 25 XSS, 20 traversal, 12 command injection, 13 protocolos varios, 12 scanners) se encuentra en [`waf-tests/corpus.sh`](./waf-tests/corpus.sh).
 
 ### 5.3 Endpoints destructivos (DoS / CPU)
 
@@ -243,7 +252,7 @@ Estos endpoints **afectan al cluster** si alcanzan el backend. Para observar el 
 | Endpoint | Sin WAF | Con WAF |
 |----------|---------|:-------:|
 | `/utility/panic` | provoca la caída del pod de UI | **403** |
-| `/utility/health/down` | marca el pod como unhealthy → 502 hasta el reinicio | **403** |
+| `/utility/health/down` | marca el pod como unhealthy → el readiness probe lo saca de servicio (~30 s) y la app queda en `503` hasta el reinicio | **403** |
 | `/utility/stress/{n}` | consumo intensivo de CPU, degrada el rendimiento | **403** |
 
 ## 6. Identificar la regla que se activó en un request
@@ -264,13 +273,9 @@ Esto es especialmente relevante para las reglas en **modo detección** (como la 
 
 ## 7. Ajuste del CRS y demostraciones complementarias (opcional)
 
-### 7.1 Demo del ajuste del CRS
+### 7.1 Ajuste del CRS (falsos positivos)
 
-`demo-scripts/crs-tuning/demo-flip.sh` recorre cómo una búsqueda legítima con símbolos (`q=1+2-3*4/5=6`, p. ej. un código de producto) cambia de comportamiento según el ajuste del CRS:
-
-```bash
-./demo-scripts/crs-tuning/demo-flip.sh   # PL1 pasa -> PL2 falso positivo -> corrección
-```
+En paranoia level 2, una búsqueda legítima con símbolos (`q=1+2-3*4/5=6`, p. ej. un código de producto) se comporta distinto según el ajuste del CRS. El estado por defecto committeado es **PL2 + exclusión acotada**:
 
 | Estado | FP `1+2-3*4/5=6` | SQLi `' OR 1=1--` | XSS |
 |--------|:----------------:|:-----------------:|:---:|
@@ -281,38 +286,7 @@ Esto es especialmente relevante para las reglas en **modo detección** (como la 
 
 En PL2, la regla CRS `932200` ("RCE Bypass Technique") suma anomaly score 10 ≥ threshold 5, por lo que la `949110` bloquea (`403`). La exclusión acotada (`ctl:ruleRemoveTargetById=932200;ARGS:q`) corrige el falso positivo sin afectar SQLi/XSS; subir el threshold también lo corrige, pero de forma global (justificación completa en la sección 3.1).
 
-Estados sueltos aplicables a mano con `set-crs.sh`:
-
-```bash
-./demo-scripts/crs-tuning/set-crs.sh --pl 2                 # paranoia level 2
-./demo-scripts/crs-tuning/set-crs.sh --pl 2 --exclude-fp    # + exclusión de 932200 (la del FP de esta demo)
-./demo-scripts/crs-tuning/set-crs.sh --pl 2 --threshold 20  # + threshold alto (instrumento grueso)
-./demo-scripts/turn-waf-on.sh                               # restaura el ConfigMap committeado
-```
-
-Para reproducir los datos que respaldan la sección 3.1 (detección vs. falsos positivos por paranoia level, score de anomalía por request, y los 11 ataques que PL2 detecta y PL1 deja pasar):
-
-```bash
-./src/waf-tests/paranoia-sweep.sh    # detección vs FP por paranoia level -> paranoia-sweep.csv
-./src/waf-tests/anomaly-scores.sh    # anomaly score por request          -> anomaly-scores.csv
-./src/waf-tests/pl-detection-gap.sh  # ataques ofuscados que PL2 agrega sobre PL1
-python3 src/waf-tests/plot-paranoia.py   # paranoia-sweep.csv  -> docs/images/paranoia-fp.png
-python3 src/waf-tests/plot-anomaly.py    # anomaly-scores.csv  -> docs/images/anomaly-*.png
-```
-
 > El paranoia level y el threshold se fijan desde el ConfigMap con un `SecAction setvar:tx.blocking_paranoia_level=N`, que se carga antes del CRS (cuyo init es *set-if-unset*, así que ese valor gana). Parchear el ConfigMap recarga nginx **in-process** (~6 s) sin downtime; **no** usar `kubectl rollout restart` sobre el controller (réplica única con hostPort 80 en Kind → cortaría el tráfico).
-
-### 7.2 Demostraciones de impacto
-
-Cada script restaura la configuración por defecto del WAF al finalizar:
-
-```bash
-./demo-scripts/impact/show-damage.sh        # datos filtrados sin WAF vs 403 con WAF
-./src/waf-tests/availability.sh             # disponibilidad bajo ataque (con vs sin WAF)
-./src/waf-tests/latency-overhead.sh         # overhead de latencia (ApacheBench)
-```
-
-Estos scripts escriben CSVs en `src/waf-tests/` y los `plot-*.py` los convierten en gráficos PNG en `docs/images/`. Tanto los CSVs como los PNG generados están fuera del control de versiones (se regeneran al correr los scripts).
 
 ## 8. Estructura del repositorio
 
@@ -321,7 +295,6 @@ local.sh                          gestión del cluster local (Kind)
 dist/kubernetes.yaml              manifiestos de los microservicios
 dist/modsecurity-configmap.yaml   configuración del WAF (reglas custom + CRS)
 src/<servicio>/                   código de cada microservicio
-src/waf-tests/                    scripts de validación, corpus y generación de gráficos
-demo-scripts/                     activación del WAF, demo de ajuste del CRS y demostraciones
-docs/images/                      diagrama de arquitectura (los gráficos generados no se versionan)
+waf-tests/                        gate de validación del WAF (run.sh) y helpers de demo en waf-tests/demo/
+docs/images/                      diagrama de arquitectura
 ```

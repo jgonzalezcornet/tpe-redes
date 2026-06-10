@@ -32,10 +32,3 @@ devenv.local.nix
 
 .pre-commit-config.yaml
 __pycache__/
-
-# Datos generados por los scripts de src/waf-tests (se regeneran al correrlos)
-src/waf-tests/*.csv
-
-# Gráficos generados por los plot-*.py (se regeneran); solo se versiona architecture.png
-docs/images/*.png
-!docs/images/architecture.png

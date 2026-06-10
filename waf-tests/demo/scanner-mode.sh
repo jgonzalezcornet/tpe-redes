@@ -13,7 +13,7 @@
 #   block:  los UA de scanner se rechazan con 403 (regla 4001 con deny).
 #
 # El estado committeado en dist/modsecurity-configmap.yaml ya es 'detect'; para
-# volver al default también sirve demo-scripts/turn-waf-on.sh.
+# volver al default también sirve waf-tests/demo/turn-waf-on.sh.
 #
 # Uso: ./scanner-mode.sh <detect|block>
 set -euo pipefail
@@ -21,7 +21,7 @@ set -euo pipefail
 NS=ingress-nginx
 BASE="${WAF_TEST_URL:-http://localhost}"
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
-REPO_ROOT="$( cd "$DIR/.." >/dev/null 2>&1 && pwd )"
+REPO_ROOT="$( cd "$DIR/../.." >/dev/null 2>&1 && pwd )"
 SRC="$REPO_ROOT/dist/modsecurity-configmap.yaml"
 
 DETECT_ACTIONS='id:4001,phase:1,pass,log,auditlog,t:none,tag:scanner,msg:malicious_scanner_detected,ctl:ruleEngine=DetectionOnly'

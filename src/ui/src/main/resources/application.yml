@@ -68,5 +68,16 @@ management:
     web:
       exposure:
         include: info,health,metrics,prometheus
+  endpoint:
+    health:
+      group:
+        # El readiness probe del pod usa /actuator/health/readiness. Por defecto
+        # ese grupo solo refleja readinessState, así que el toggle de /utility/health
+        # no afectaba la disponibilidad. Se incluye el contributor `toggle`
+        # (bean ToggleHealthIndicator) para que /utility/health/down ponga el pod
+        # NotReady y lo saque de servicio — el endpoint destructivo documentado en
+        # el README §5.3 (DoS) pasa a ser realmente efectivo sin WAF.
+        readiness:
+          include: readinessState,toggle
 
 otel.sdk.disabled: true
