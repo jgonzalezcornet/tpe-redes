@@ -1,15 +1,15 @@
 #!/bin/bash
-# Corpus amplio para medir, a escala, dos métricas que con 18/13 no son
+# Corpus amplio para medir, a escala, dos métricas que con 19/13 no son
 # significativas:
 #   - TASA DE DETECCIÓN  : % de ataques que el WAF bloquea (attack_corpus, 100+).
 #   - TASA DE FALSOS POS.: % de tráfico legítimo que el WAF bloquea (happy_corpus, 100+).
 #
-# Complementa el mapeo 1-a-1 del pre-entrega en cases.sh (18 ataques / 13
+# Complementa el mapeo 1-a-1 del pre-entrega en cases.sh (19 ataques / 13
 # legítimos, que son el gate de regresión y deben dar 100%). Acá la diversidad
 # importa más que el "todo verde": un corpus amplio puede mostrar algún bypass
 # (ataque exótico que pasa) o algún FP — eso es información útil, no un error.
 #
-# Lo consumen attacks-corpus.sh / happy-corpus.sh vía run_case() de lib.sh.
+# Lo consume run.sh (flags --corpus/--full) vía run_case() de lib.sh.
 # Cada payload de q=/file= se manda url-encodeado (--data-urlencode); el WAF
 # lo decodifica e inspecciona igual.
 

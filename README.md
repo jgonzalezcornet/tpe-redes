@@ -46,6 +46,69 @@ flowchart LR
 
 ---
 
+## Agregar ModSecurity + OWASP CRS a un ingress-nginx (procedimiento general)
+
+Antes de la guía específica de este proyecto, esta sección resume el procedimiento **genérico** para sumar un WAF (ModSecurity + OWASP Core Rule Set) a un **ingress-nginx**, por si se quisiera replicar en otro entorno. En este repositorio estos pasos ya están hechos y automatizados: al levantar el cluster, The Store arranca con el WAF prendido (ver *En este repositorio*, al final de esta sección).
+
+La imagen del controller **v1.13.1** (la que instala `local.sh`) trae ModSecurity embebido; no hace falta compilar ni instalar un módulo aparte. En ingress-nginx el WAF se configura de dos formas posibles:
+
+| Enfoque | Dónde se define | Alcance |
+|---------|-----------------|---------|
+| **ConfigMap del controller** (el que usa este proyecto) | `ingress-nginx-controller`, namespace `ingress-nginx` | Global: todo el tráfico que pasa por el ingress |
+| **Anotaciones por Ingress** | `metadata.annotations` de cada recurso `Ingress` | Por host/ruta |
+
+Este proyecto usa el **ConfigMap global**: un único patch aplica el WAF a todo el tráfico sin tocar los manifiestos de la aplicación. Las anotaciones equivalentes (`nginx.ingress.kubernetes.io/enable-modsecurity`, etc.) están documentadas en la [sección ModSecurity de ingress-nginx](https://kubernetes.github.io/ingress-nginx/user-guide/nginx-configuration/annotations/#modsecurity).
+
+### Paso 1 — Definir las claves de configuración
+
+ingress-nginx lee tres claves de su ConfigMap:
+
+- `enable-modsecurity: "true"` — activa ModSecurity en todas las rutas.
+- `enable-owasp-modsecurity-crs: "true"` — carga el OWASP Core Rule Set.
+- `modsecurity-snippet` — directivas y reglas custom (`SecRuleEngine On`, tuning del CRS, reglas propias).
+
+Forma mínima para encender el WAF en modo bloqueo:
+
+```yaml
+data:
+  enable-modsecurity: "true"
+  enable-owasp-modsecurity-crs: "true"
+  modsecurity-snippet: |
+    Include /etc/nginx/modsecurity/modsecurity.conf
+    SecRuleEngine On
+```
+
+Una regla custom de ModSecurity se agrega dentro de `modsecurity-snippet`. Por ejemplo, bloquear con `403` cualquier request a `/info` (es una de las reglas reales de este proyecto, id `1003`):
+
+```yaml
+    # Bloquea el acceso a /info y devuelve 403
+    SecRule REQUEST_URI "@streq /info" \
+        "id:1003,phase:1,deny,status:403,log,msg:info_endpoint_blocked"
+```
+
+Cada regla declara un `id` único, la `phase` en la que evalúa, la acción (`deny,status:403` para bloquear o `pass` para solo registrar), `log` para auditar y un `msg` que aparece en el audit log.
+
+### Paso 2 — Aplicar la configuración
+
+No se hace `kubectl apply` de un ConfigMap nuevo: se **parchea** (merge) el ConfigMap que ingress-nginx ya creó al instalarse. El archivo del patch contiene solo la sección `data:` (no `apiVersion`/`kind`/`metadata`):
+
+```bash
+kubectl patch configmap ingress-nginx-controller \
+  -n ingress-nginx \
+  --type merge \
+  --patch-file dist/modsecurity-configmap.yaml
+```
+
+El controller observa el cambio en ese ConfigMap y recarga nginx en caliente (unos segundos); no hace falta `kubectl rollout restart` del deployment.
+
+### En este repositorio
+
+Estos pasos ya están automatizados: `local.sh` aplica exactamente ese patch al crear el cluster (paso `configure_modsecurity`), de modo que The Store arranca con ModSecurity + CRS en **modo bloqueo** y sin requerir ninguna acción adicional. La configuración completa —tuning del CRS y las cinco reglas custom del TP— vive en [`dist/modsecurity-configmap.yaml`](./dist/modsecurity-configmap.yaml) y se detalla en la sección 3.
+
+Prender y apagar el WAF es este mismo patch sobre el ConfigMap (`enable-modsecurity: "true"` para activarlo, `"false"` para desactivarlo); para no escribir el comando a mano, los scripts `waf-tests/demo/turn-waf-on.sh` y `turn-waf-off.sh` automatizan ese toggle (sección 4.1).
+
+---
+
 ## 1. Prerrequisitos
 
 - [Docker](https://docs.docker.com/get-docker/) en ejecución.
@@ -177,6 +240,14 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost/info   # 200 sin WAF, 
 | Scanners automáticos | cualquier ruta con `User-Agent` de `sqlmap`, `nikto`, `nmap` o `wpscan` | `4001` | Registra el reconocimiento (modo **detección**, ver más abajo) |
 
 > **Regla 2002: fuente de la IP.** La pre-entrega plantea filtrar por el header `X-Forwarded-For`. La implementación usa `REMOTE_ADDR` (la IP de la conexión TCP que ve nginx): `X-Forwarded-For` lo controla el cliente y queda *undefined* cuando no lo envía, en cuyo caso la regla *chained* no dispararía y `/utility/*` quedaría expuesto. `REMOTE_ADDR` siempre existe y no es spoofeable a nivel HTTP, por lo que cumple el objetivo (restringir los endpoints administrativos a IPs autorizadas) de forma más robusta. En producción detrás de un balanceador se volvería a `X-Forwarded-For` con `trusted-proxies` configurado.
+>
+> **Qué cubre `127.0.0.1` en este cluster.** `127.0.0.1` es el *loopback del propio Pod del controller*, no "la máquina que corre el cluster". En Kind, el SNAT del trayecto `host → Docker → Pod` hace que ModSecurity vea siempre una IP interna del cluster, nunca la IP real del cliente ni `127.0.0.1`. Por eso `/utility/*` se bloquea **incluso desde la propia máquina que levantó el cluster** vía `http://localhost` (es lo que valida `run.sh --attacks`): la allowlist habilita únicamente el loopback del Pod. Un request alcanza `/utility/*` solo si nace dentro del Pod:
+>
+> ```bash
+> # Desde el host → 403; desde adentro del Pod (REMOTE_ADDR = 127.0.0.1) → pasa
+> kubectl -n ingress-nginx exec deploy/ingress-nginx-controller -- \
+>   curl -s -o /dev/null -w "%{http_code}\n" http://localhost/utility/headers
+> ```
 
 Comandos de prueba (resultado **sin WAF** → **con WAF**):
 
@@ -271,7 +342,7 @@ Cada entrada incluye el `[id "..."]` y el `[msg "..."]` de la regla (p. ej.
 
 Esto es especialmente relevante para las reglas en **modo detección** (como la de scanner, sección 5.1): al no bloquear, el audit log es la **única** señal de que se detectó el patrón. Un scanner detectado aparece con `id "4001"` y `msg "malicious_scanner_detected"` aunque el request haya devuelto `200`.
 
-> **Persistencia (alcance del PoC).** Tanto el audit log (archivos en el filesystem efímero del Pod del controller) como el stream de `kubectl logs` (que el kubelet retiene solo para el contenedor actual) se pierden si el Pod se reinicia o se recrea el cluster. Para este PoC es suficiente: el objetivo es **generar** logs estructurados y auditables (IP de origen, endpoint, payload, regla), no retenerlos. El paso a producción es directo porque las denegaciones ya salen por **stdout/stderr**. alcanza con agregar un colector (p. ej. Fluent Bit como DaemonSet) que envíe esos eventos a un store central (Loki / Elasticsearch / SIEM), opcionalmente con `SecAuditLogFormat JSON` para parseo directo.
+> **Persistencia (alcance del PoC).** Tanto el audit log (archivos en el filesystem efímero del Pod del controller) como el stream de `kubectl logs` (que el kubelet retiene solo para el contenedor actual) se pierden si el Pod se reinicia o se recrea el cluster. Para este PoC es suficiente: el objetivo es **generar** logs estructurados y auditables (IP de origen, endpoint, payload, regla), no retenerlos. El paso a producción es directo: como las denegaciones ya salen por **stdout/stderr**, alcanza con agregar un colector (p. ej. Fluent Bit como DaemonSet) que envíe esos eventos a un store central (Loki / Elasticsearch / SIEM), opcionalmente con `SecAuditLogFormat JSON` para parseo directo.
 
 ## 7. Ajuste del CRS y demostraciones complementarias (opcional)
 
@@ -298,5 +369,4 @@ dist/kubernetes.yaml              manifiestos de los microservicios
 dist/modsecurity-configmap.yaml   configuración del WAF (reglas custom + CRS)
 src/<servicio>/                   código de cada microservicio
 waf-tests/                        gate de validación del WAF (run.sh) y helpers de demo en waf-tests/demo/
-docs/images/                      diagrama de arquitectura
 ```
