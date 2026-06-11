@@ -1,4 +1,4 @@
-# The Store — WAF (ModSecurity + OWASP CRS)
+# The Store: WAF (ModSecurity + OWASP CRS)
 
 En el repositorio actual se encuentra **The Store**, una plataforma de e-commerce con arquitectura de microservicios, sobre la que se implementó un **Web Application Firewall** en el borde como trabajo práctico de la materia 72.20 Redes de Información (ITBA).
 
@@ -59,13 +59,13 @@ La imagen del controller **v1.13.1** (la que instala `local.sh`) trae ModSecurit
 
 Este proyecto usa el **ConfigMap global**: un único patch aplica el WAF a todo el tráfico sin tocar los manifiestos de la aplicación. Las anotaciones equivalentes (`nginx.ingress.kubernetes.io/enable-modsecurity`, etc.) están documentadas en la [sección ModSecurity de ingress-nginx](https://kubernetes.github.io/ingress-nginx/user-guide/nginx-configuration/annotations/#modsecurity).
 
-### Paso 1 — Definir las claves de configuración
+### Paso 1: Definir las claves de configuración
 
 ingress-nginx lee tres claves de su ConfigMap:
 
-- `enable-modsecurity: "true"` — activa ModSecurity en todas las rutas.
-- `enable-owasp-modsecurity-crs: "true"` — carga el OWASP Core Rule Set.
-- `modsecurity-snippet` — directivas y reglas custom (`SecRuleEngine On`, tuning del CRS, reglas propias).
+- `enable-modsecurity: "true"`: activa ModSecurity en todas las rutas.
+- `enable-owasp-modsecurity-crs: "true"`: carga el OWASP Core Rule Set.
+- `modsecurity-snippet`: directivas y reglas custom (`SecRuleEngine On`, tuning del CRS, reglas propias).
 
 Forma mínima para encender el WAF en modo bloqueo:
 
@@ -88,7 +88,7 @@ Una regla custom de ModSecurity se agrega dentro de `modsecurity-snippet`. Por e
 
 Cada regla declara un `id` único, la `phase` en la que evalúa, la acción (`deny,status:403` para bloquear o `pass` para solo registrar), `log` para auditar y un `msg` que aparece en el audit log.
 
-### Paso 2 — Aplicar la configuración
+### Paso 2: Aplicar la configuración
 
 No se hace `kubectl apply` de un ConfigMap nuevo: se **parchea** (merge) el ConfigMap que ingress-nginx ya creó al instalarse. El archivo del patch contiene solo la sección `data:` (no `apiVersion`/`kind`/`metadata`):
 
@@ -103,7 +103,7 @@ El controller observa el cambio en ese ConfigMap y recarga nginx en caliente (un
 
 ### En este repositorio
 
-Estos pasos ya están automatizados: `local.sh` aplica exactamente ese patch al crear el cluster (paso `configure_modsecurity`), de modo que The Store arranca con ModSecurity + CRS en **modo bloqueo** y sin requerir ninguna acción adicional. La configuración completa —tuning del CRS y las cinco reglas custom del TP— vive en [`dist/modsecurity-configmap.yaml`](./dist/modsecurity-configmap.yaml) y se detalla en la sección 3.
+Estos pasos ya están automatizados: `local.sh` aplica exactamente ese patch al crear el cluster (paso `configure_modsecurity`), de modo que The Store arranca con ModSecurity + CRS en **modo bloqueo** y sin requerir ninguna acción adicional. La configuración completa (el tuning del CRS y las cinco reglas custom del TP) vive en [`dist/modsecurity-configmap.yaml`](./dist/modsecurity-configmap.yaml) y se detalla en la sección 3.
 
 Prender y apagar el WAF es este mismo patch sobre el ConfigMap (`enable-modsecurity: "true"` para activarlo, `"false"` para desactivarlo); para no escribir el comando a mano, los scripts `waf-tests/demo/turn-waf-on.sh` y `turn-waf-off.sh` automatizan ese toggle (sección 4.1).
 
